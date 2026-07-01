@@ -496,7 +496,7 @@ function renderTP(k,label){
 // PAYROLL CALC
 // ────────────────────────────────────────
 
-// 특정 날짜의 근무시간 반환 (월 경계 무관 — 주휴 계산용)
+// 특정 날짜의 근무시간 반환 (예외 포함)
 function getHrsForDate(worker, ds) {
   const dt=new Date(ds+'T00:00:00')
   const isWork=worker.workDays.includes(dt.getDay())
@@ -513,6 +513,13 @@ function getHrsForDate(worker, ds) {
     }
   }
   return isWork?regH:0
+}
+
+// 특정 날짜의 정규 스케줄 시간만 반환 (예외 무시 — 전월/차월 크로스월 주휴 계산용)
+function getRegHrsForDate(worker, ds) {
+  const dt=new Date(ds+'T00:00:00')
+  const isWork=worker.workDays.includes(dt.getDay())
+  return isWork?dailyHours(worker):0
 }
 
 function calcPayroll(worker, ym) {
@@ -539,7 +546,9 @@ function calcPayroll(worker, ym) {
     let wH=0
     for(let i=0;i<7;i++){
       const day=new Date(monday); day.setDate(day.getDate()+i)
-      wH+=getHrsForDate(worker, dateStr(day))
+      const dayDs=dateStr(day)
+      // 해당 월 내 날짜: 실제 근무시간(예외 포함) / 전월·차월 날짜: 정규 스케줄만 (전월 예외가 차월 주휴에 영향 방지)
+      wH+=(day.getFullYear()===y&&day.getMonth()+1===m)?getHrsForDate(worker,dayDs):getRegHrsForDate(worker,dayDs)
     }
     const cappedWH=Math.min(wH,40) // 주휴수당 산정 기준 최대 40h (법정 한도)
     const j=wH>=15?(cappedWH/40)*8*worker.hourlyWage:0
@@ -1597,8 +1606,16 @@ function parseKakaoText(text,ym){
 
   // ── 시간 범위 추출 헬퍼 ──
   function extractTime(str){
+    // 오전/오후 H:MM ~ 오전/오후 H:MM (카카오 시간 포맷: 오후 6:00 ~ 오후 11:00)
+    let p=str.match(/(오전|오후)\s*(\d{1,2}):(\d{2})\s*[~\-]\s*(오전|오후)\s*(\d{1,2}):(\d{2})/)
+    if(p){
+      let sh=+p[2],sm=+p[3],eh=+p[5],em=+p[6]
+      if(p[1]==='오후'&&sh!==12)sh+=12;if(p[1]==='오전'&&sh===12)sh=0
+      if(p[4]==='오후'&&eh!==12)eh+=12;if(p[4]==='오전'&&eh===12)eh=0
+      return[String(sh).padStart(2,'0')+':'+String(sm).padStart(2,'0'),String(eh).padStart(2,'0')+':'+String(em).padStart(2,'0')]
+    }
     // HH:MM~HH:MM
-    let p=str.match(/(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})/)
+    p=str.match(/(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})/)
     if(p) return[p[1].padStart(2,'0')+':'+p[2], p[3].padStart(2,'0')+':'+p[4]]
     // 오전/오후 시 ~ 오전/오후 시
     p=str.match(/(오전|오후)\s*(\d{1,2})시(?:(\d{2})분)?\s*[~\-]\s*(오전|오후)\s*(\d{1,2})시(?:(\d{2})분)?/)
@@ -1623,7 +1640,8 @@ function parseKakaoText(text,ym){
   // 문자열에서 시간 패턴 제거 후 날짜 숫자 추출 (총 N일, 한국어 제거)
   function extractDays(str){
     let s=str
-    // 시간 범위 패턴 제거
+    // 시간 범위 패턴 제거 (오전/오후 H:MM 포맷 포함)
+    s=s.replace(/(오전|오후)\s*\d{1,2}:\d{2}\s*[~\-]\s*(오전|오후)\s*\d{1,2}:\d{2}/g,' ')
     s=s.replace(/(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})/g,' ')
     s=s.replace(/(오전|오후)\s*\d{1,2}시(?:\d{2}분)?\s*[~\-]\s*(오전|오후)\s*\d{1,2}시(?:\d{2}분)?/g,' ')
     s=s.replace(/\d{1,2}시(?:\d{2}분)?\s*[~\-]\s*\d{1,2}시(?:\d{2}분)?/g,' ')
@@ -1648,11 +1666,11 @@ function parseKakaoText(text,ym){
   for(const line of lines){
     const t=line.trim()
     if(!t) continue
-    // 숫자, 공백, 쉼표, '일' 만으로 이루어진 줄 → 날짜 목록으로 판단
+    // 숫자, 공백, 쉼표, '일' 만으로 이루어진 줄 → 날짜 목록으로 판단 (1개짜리 줄도 포함)
     const stripped=t.replace(/일/g,'').replace(/[,，]/g,' ').trim()
     if(/^[\d\s]+$/.test(stripped)){
       const nums=stripped.split(/\s+/).map(Number).filter(n=>n>=1&&n<=dim)
-      if(nums.length>=2){ bulkDays.push(...nums); continue }
+      if(nums.length>=1){ bulkDays.push(...nums); continue }
     }
     // 나머지 줄에서 시간 추출
     const ti=extractTime(t)
@@ -1673,7 +1691,7 @@ function parseKakaoText(text,ym){
     const t=line.trim(); if(!t) continue
     const ti=extractTime(t); if(!ti) continue
     const days=extractDays(t)
-    if(days.length>=2){
+    if(days.length>=1){
       const[st,et]=ti
       ;[...new Set(days)].sort((a,b)=>a-b).forEach(d=>{
         if(!entries.find(e=>e.date===mkDs(d)))
@@ -1738,6 +1756,16 @@ function toast(msg){
 // INIT
 // ────────────────────────────────────────
 loadData()
+// 전월에 미지급 인원이 있으면 자동으로 전월 유지 (지급완료 전 다음달로 넘어가지 않음)
+{
+  const _now=new Date()
+  const _curYM=fmtMonth(_now)
+  const _prevYM=fmtMonth(new Date(_now.getFullYear(),_now.getMonth()-1,1))
+  if(S.month===_curYM && S.workers.length>0){
+    const _prevUnpaid=S.workers.some(w=>!S.payments.some(p=>p.wid===w.id&&p.ym===_prevYM))
+    if(_prevUnpaid) S.month=_prevYM
+  }
+}
 navigate('dashboard')
 </script>
 </body>
