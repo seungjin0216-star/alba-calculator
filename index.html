@@ -1606,12 +1606,20 @@ function parseKakaoText(text,ym){
 
   // ── 시간 범위 추출 헬퍼 ──
   function extractTime(str){
+    let p
     // 오전/오후 H:MM ~ 오전/오후 H:MM (카카오 시간 포맷: 오후 6:00 ~ 오후 11:00)
-    let p=str.match(/(오전|오후)\s*(\d{1,2}):(\d{2})\s*[~\-]\s*(오전|오후)\s*(\d{1,2}):(\d{2})/)
+    p=str.match(/(오전|오후)\s*(\d{1,2}):(\d{2})\s*[~\-]\s*(오전|오후)\s*(\d{1,2}):(\d{2})/)
     if(p){
       let sh=+p[2],sm=+p[3],eh=+p[5],em=+p[6]
       if(p[1]==='오후'&&sh!==12)sh+=12;if(p[1]==='오전'&&sh===12)sh=0
       if(p[4]==='오후'&&eh!==12)eh+=12;if(p[4]==='오전'&&eh===12)eh=0
+      return[String(sh).padStart(2,'0')+':'+String(sm).padStart(2,'0'),String(eh).padStart(2,'0')+':'+String(em).padStart(2,'0')]
+    }
+    // HH:MM ~ HH시:MM 혼합 형식 (예: 18:00~00시:00)
+    p=str.match(/(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2})시:(\d{2})/)
+    if(p){
+      let sh=+p[1],sm=+p[2],eh=+p[3],em=+p[4]
+      if(eh>=24)eh-=24
       return[String(sh).padStart(2,'0')+':'+String(sm).padStart(2,'0'),String(eh).padStart(2,'0')+':'+String(em).padStart(2,'0')]
     }
     // HH:MM~HH:MM
@@ -1637,19 +1645,15 @@ function parseKakaoText(text,ym){
 
   function mkDs(day){ return y+'-'+String(m).padStart(2,'0')+'-'+String(day).padStart(2,'0') }
 
-  // 문자열에서 시간 패턴 제거 후 날짜 숫자 추출 (총 N일, 한국어 제거)
+  // 문자열에서 시간 패턴 제거 후 날짜 숫자 추출
   function extractDays(str){
     let s=str
-    // 시간 범위 패턴 제거 (오전/오후 H:MM 포맷 포함)
     s=s.replace(/(오전|오후)\s*\d{1,2}:\d{2}\s*[~\-]\s*(오전|오후)\s*\d{1,2}:\d{2}/g,' ')
-    s=s.replace(/(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})/g,' ')
+    s=s.replace(/(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2})시?:(\d{2})/g,' ') // 혼합 포함
     s=s.replace(/(오전|오후)\s*\d{1,2}시(?:\d{2}분)?\s*[~\-]\s*(오전|오후)\s*\d{1,2}시(?:\d{2}분)?/g,' ')
     s=s.replace(/\d{1,2}시(?:\d{2}분)?\s*[~\-]\s*\d{1,2}시(?:\d{2}분)?/g,' ')
-    // "총 N일" (총 3일 등) 제거
     s=s.replace(/총\s*\d+일/g,' ')
-    // "N일" → "N" (남은 일 접미사)
     s=s.replace(/(\d+)일/g,'$1')
-    // 쉼표 → 공백
     s=s.replace(/[,，]/g,' ')
     const nums=s.match(/\d+/g)
     if(!nums) return[]
@@ -1658,35 +1662,53 @@ function parseKakaoText(text,ym){
 
   const lines=text.split(/\n/)
 
-  // ── Format B: 날짜 목록 줄 + 시간이 다른 줄에 있는 형식 ──
-  // "1 2 3 4 7 8 ... " (숫자만 있는 줄) + "18시~00시" (다른 줄)
+  // ── Format B (개선): 날짜 줄 + 시간 줄 분리 ──
+  // 지원 형식:
+  //   "신치운 1 3 4 8 9..." (이름+날짜)
+  //   "1 3 4 8 9..."       (날짜만)
+  //   "24일\n30일\n31일"   (한 줄에 하나씩)
+  // 시간 줄: "총 16일 18:00~00시:00 23일은 18:30~00:30 근무 했습니다."
   const bulkDays=[]
   let bulkTime=null
+  const dayOverrides={} // {day: [startTime, endTime]} — 날짜별 개별 시간
 
   for(const line of lines){
     const t=line.trim()
     if(!t) continue
-    // 숫자, 공백, 쉼표, '일' 만으로 이루어진 줄 → 날짜 목록으로 판단 (1개짜리 줄도 포함)
-    const stripped=t.replace(/일/g,'').replace(/[,，]/g,' ').trim()
-    if(/^[\d\s]+$/.test(stripped)){
-      const nums=stripped.split(/\s+/).map(Number).filter(n=>n>=1&&n<=dim)
-      if(nums.length>=1){ bulkDays.push(...nums); continue }
-    }
-    // 나머지 줄에서 시간 추출
+
     const ti=extractTime(t)
-    if(ti&&!bulkTime) bulkTime=ti
+    if(ti){
+      // 시간이 있는 줄: 기본 시간 저장 + "N일은 time" 예외 추출
+      if(!bulkTime) bulkTime=ti
+      const perDayRe=/(\d{1,2})일[은만]\s*/g
+      let pm
+      while((pm=perDayRe.exec(t))!==null){
+        const day=+pm[1]
+        if(day>=1&&day<=dim){
+          const rest=t.slice(pm.index+pm[0].length)
+          const excTi=extractTime(rest)
+          if(excTi) dayOverrides[day]=excTi
+        }
+      }
+      continue // 시간 줄에서는 날짜 추출 안 함
+    }
+
+    // 날짜 줄: 한글 이름 제거 후 숫자 추출
+    const noKor=t.replace(/[가-힣]+/g,' ').replace(/[,，]/g,' ')
+    const nums=(noKor.match(/\b\d{1,2}\b/g)||[]).map(Number).filter(n=>n>=1&&n<=dim)
+    if(nums.length>=1) bulkDays.push(...nums)
   }
 
-  if(bulkDays.length>=2&&bulkTime){
+  if(bulkDays.length>=1&&bulkTime){
     const[st,et]=bulkTime
     ;[...new Set(bulkDays)].sort((a,b)=>a-b).forEach(d=>{
-      entries.push({date:mkDs(d),startTime:st,endTime:et})
+      const[s,e]=dayOverrides[d]||[st,et]
+      entries.push({date:mkDs(d),startTime:s,endTime:e})
     })
     return entries
   }
 
   // ── Format C: 한 줄에 날짜 여러 개 + 시간 ──
-  // "김근영 24 30 31 총 3일 18시~00시 근무 했습니다~"
   for(const line of lines){
     const t=line.trim(); if(!t) continue
     const ti=extractTime(t); if(!ti) continue
@@ -1702,7 +1724,6 @@ function parseKakaoText(text,ym){
   if(entries.length>0) return entries
 
   // ── Format A: 줄마다 날짜+시간 형식 ──
-  // "3일 오후2시~오후11시" / "15일 14:00~23:00" / "3/15 오전10시~오후6시"
   for(const line of lines){
     const t=line.trim(); if(!t) continue
     const dayM=t.match(/(\d{1,2})[일\/]/)
