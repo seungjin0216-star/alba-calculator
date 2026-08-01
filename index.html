@@ -174,9 +174,9 @@
     .wcard-body{padding:14px 14px 10px;cursor:pointer;}
     .wcard-del{
       position:absolute;top:8px;right:8px;
-      background:rgba(0,0,0,.06);border:none;
-      width:26px;height:26px;border-radius:50%;
-      font-size:15px;cursor:pointer;color:#94a3b8;
+      background:rgba(239,68,68,.1);border:none;
+      padding:3px 8px;height:24px;border-radius:12px;
+      font-size:11px;font-weight:700;cursor:pointer;color:#ef4444;
       display:flex;align-items:center;justify-content:center;z-index:2;
     }
     .wcard-name{font-size:17px;font-weight:800;margin-bottom:3px;padding-right:30px;line-height:1.2;}
@@ -603,7 +603,7 @@ function pgDashboard(){
   const ym=S.month,{y,m}=parseYM(ym)
 
   const branchCards=S.branches.map(b=>{
-    const ws=S.workers.filter(w=>w.branchId===b.id)
+    const ws=S.workers.filter(w=>w.branchId===b.id&&(!w.resigned||w.resignDate>=ym))
     let bg=0,bn=0,bju=0
     ws.forEach(w=>{const r=calcPayroll(w,ym);bg+=r.gross;bn+=r.net;bju+=r.totalJuHyu})
     const fixedCnt=ws.filter(w=>w.fixed!==false).length
@@ -631,7 +631,7 @@ function pgDashboard(){
   <div class="pcontent">
     <div class="stat-row">
       <div class="stat-card"><div class="stat-label">지점</div><div class="stat-value" style="color:#4f46e5">${S.branches.length}</div></div>
-      <div class="stat-card"><div class="stat-label">알바 인원</div><div class="stat-value" style="color:#0891b2">${S.workers.length}명</div></div>
+      <div class="stat-card"><div class="stat-label">알바 인원</div><div class="stat-value" style="color:#0891b2">${S.workers.filter(w=>!w.resigned).length}명</div></div>
     </div>
     ${S.branches.length===0
       ?`<div class="card"><div class="empty"><p>지점을 먼저 등록해주세요</p><br><button class="btn btn-primary" onclick="navigate('branches')">지점 등록</button></div></div>`
@@ -644,7 +644,7 @@ function pgDashboard(){
 // ────────────────────────────────────────
 function pgBranches(){
   const cards=S.branches.map(b=>{
-    const cnt=S.workers.filter(w=>w.branchId===b.id).length
+    const cnt=S.workers.filter(w=>w.branchId===b.id&&!w.resigned).length
     return`<div class="branch-card">
       <div class="flex-between">
         <div style="font-size:17px;font-weight:800">🏪 ${b.name}</div>
@@ -698,7 +698,9 @@ function deleteBranch(id){
 // ────────────────────────────────────────
 function pgWorkers(){
   const fb=S.filterBranch,ym=S.month,{y,m}=parseYM(ym)
-  const ws=fb?S.workers.filter(w=>w.branchId===fb):S.workers
+  const allWs=fb?S.workers.filter(w=>w.branchId===fb):S.workers
+  const ws=allWs.filter(w=>!w.resigned)
+  const resignedWs=allWs.filter(w=>w.resigned)
   const fixedWs=ws.filter(w=>w.fixed!==false)
   const flexWs=ws.filter(w=>w.fixed===false)
 
@@ -711,7 +713,7 @@ function pgWorkers(){
       const isPaid=S.payments.some(p=>p.wid===w.id&&p.ym===ym)
       const isFlx=w.fixed===false
       return`<div class="wcard">
-        <button class="wcard-del" onclick="event.stopPropagation();deleteWorker('${w.id}')">×</button>
+        <button class="wcard-del" onclick="event.stopPropagation();resignWorker('${w.id}')">퇴사</button>
         <div class="wcard-body" onclick="modalPayDetail('${w.id}','${ym}')">
           <div class="wcard-name">${w.name}</div>
           <div class="wcard-branch">
@@ -758,6 +760,22 @@ function pgWorkers(){
     ${ws.length===0
       ?`<div class="card"><div class="empty"><p>${S.branches.length===0?'먼저 지점을 등록해주세요':'등록된 알바생이 없습니다'}</p></div></div>`
       :`${fixedSection}${flexSection}`}
+    ${resignedWs.length>0?`
+    <details style="margin-top:16px">
+      <summary style="font-size:12px;font-weight:700;color:#94a3b8;cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:4px">
+        <span>▶</span> 퇴사자 (${resignedWs.length}명)
+      </summary>
+      <div style="margin-top:8px">
+        ${resignedWs.map(w=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#f8fafc;border-radius:10px;margin-bottom:6px">
+          <div>
+            <span style="font-weight:700;color:#94a3b8">${w.name}</span>
+            <span style="font-size:11px;color:#cbd5e1;margin-left:6px">${branchName(w.branchId)} · ${w.resignDate}까지</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="undoResign('${w.id}')" style="font-size:11px;padding:4px 10px">복직</button>
+        </div>`).join('')}
+      </div>
+    </details>`:''}
   </div>`
 }
 
@@ -844,11 +862,23 @@ function saveWorker(id){
   save();cm();navigate('workers');toast(id?'수정됐습니다':'등록됐습니다')
 }
 
-function deleteWorker(id){
-  if(!confirm('삭제하시겠습니까?'))return
-  S.workers=S.workers.filter(w=>w.id!==id)
-  S.exceptions=S.exceptions.filter(e=>e.wid!==id)
-  save();navigate('workers');toast('삭제됐습니다')
+function resignWorker(id){
+  const w=S.workers.find(x=>x.id===id)
+  if(!w)return
+  const lastMonth=prompt(`${w.name}의 마지막 근무월을 입력하세요 (예: 2026-06)`,S.month)
+  if(lastMonth===null)return
+  if(!lastMonth.match(/^\d{4}-\d{2}$/)){toast('형식이 맞지 않습니다 (예: 2026-06)');return}
+  w.resigned=true
+  w.resignDate=lastMonth
+  save();renderPage('workers');toast(`${w.name} 퇴사 처리됐습니다 (마지막 근무: ${lastMonth})`)
+}
+
+function undoResign(id){
+  const w=S.workers.find(x=>x.id===id)
+  if(!w)return
+  delete w.resigned
+  delete w.resignDate
+  save();renderPage('workers');toast(`${w.name} 복직 처리됐습니다`)
 }
 
 // ────────────────────────────────────────
@@ -857,7 +887,7 @@ function deleteWorker(id){
 function pgPayroll(){
   const ym=S.month,{y,m}=parseYM(ym)
   const fb=S.filterBranch
-  const ws=fb?S.workers.filter(w=>w.branchId===fb):S.workers
+  const ws=(fb?S.workers.filter(w=>w.branchId===fb):S.workers).filter(w=>!w.resigned||w.resignDate>=ym)
   const results=ws.map(w=>calcPayroll(w,ym))
   const tGross=results.reduce((s,r)=>s+r.gross,0)
   const tNet=results.reduce((s,r)=>s+r.net,0)
