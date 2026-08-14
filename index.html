@@ -1862,7 +1862,6 @@ async function staffReload(){
   try{
     const d = await staffFetch('staffList')
     ST.staff = d.staff || []
-    ST.payments = d.payments || []
     ST.loaded = true
   }catch(e){
     ST.loaded = false
@@ -1872,17 +1871,18 @@ async function staffReload(){
   renderPage('staff')
 }
 
-/** 그 달에 재직 중인 직원만 (입사 전·퇴사 후 제외) */
+/**
+ * 그 달에 재직 중인 직원
+ *   입사 연월이 비어 있으면 "예전부터 재직" 으로 본다.
+ *   오래 다닌 직원은 정확한 입사일을 모르는 경우가 많다.
+ */
 function staffActive(ym){
   return ST.staff.filter(s=>{
-    const st = String(s['시작연월']||''), en = String(s['종료연월']||'')
+    const st = String(s['시작연월']||'').trim(), en = String(s['종료연월']||'').trim()
     if(st && ym < st) return false
     if(en && ym > en) return false
     return true
   })
-}
-function staffPaid(id, ym){
-  return ST.payments.some(p=>String(p['직원id'])===String(id) && String(p['연월'])===ym)
 }
 
 function pgStaff(){
@@ -1892,9 +1892,9 @@ function pgStaff(){
 
   const inBranch = (s)=> !fb || (s['지점']||'백석점') === fb
   const list    = staffActive(ym).filter(inBranch)
-  const 퇴사자  = ST.staff.filter(s=>{ const en=String(s['종료연월']||''); return en && ym > en }).filter(inBranch)
-  const total   = list.reduce((a,s)=> a + (staffPaid(s['id'],ym) ? Number(s['월급'])||0 : 0), 0)
-  const 미지급  = list.filter(s=>!staffPaid(s['id'],ym)).length
+  const 퇴사자  = ST.staff.filter(s=>{ const en=String(s['종료연월']||'').trim(); return en && ym > en }).filter(inBranch)
+  // 재직 중이면 무조건 그 달 인건비다. 지급 체크 같은 건 없다.
+  const total   = list.reduce((a,s)=> a + (Number(s['월급'])||0), 0)
 
   const pills = `<div class="pill ${!fb?'active':''}" onclick="ST.filterBranch='';renderPage('staff')">전체</div>
     ${STAFF_BRANCHES.map(b=>`<div class="pill ${fb===b?'active':''}" onclick="ST.filterBranch='${b}';renderPage('staff')">${b}</div>`).join('')}`
@@ -1909,19 +1909,16 @@ function pgStaff(){
   }
 
   function cardOf(s){
-    const paid = staffPaid(s['id'], ym)
-    return `<div class="card" style="margin-bottom:8px;padding:12px 14px">
+    const 시작 = String(s['시작연월']||'').trim()
+    return `<div class="card" style="margin-bottom:8px;padding:12px 14px;cursor:pointer" onclick="modalStaff('${s['id']}')">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-        <div style="flex:1;min-width:0;cursor:pointer" onclick="modalStaff('${s['id']}')">
+        <div style="flex:1;min-width:0">
           <div style="font-weight:700">${s['이름']}
             <span class="tag tag-blue" style="margin-left:5px">${s['지점']||'백석점'}</span>
-            ${paid?'<span class="paid-badge" style="margin-left:3px">✓</span>':''}
           </div>
-          <div style="font-size:13px;color:#334155;margin-top:3px">${won(Number(s['월급'])||0)}</div>
-          <div style="font-size:11px;color:#94a3b8;margin-top:1px">${s['시작연월']||''} ~ ${s['종료연월']||'재직중'}</div>
+          ${시작?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${시작} 입사</div>`:''}
         </div>
-        <button class="btn ${paid?'btn-secondary':'btn-primary'} btn-sm"
-                onclick="event.stopPropagation();staffTogglePay('${s['id']}')">${paid?'지급취소':'지급완료'}</button>
+        <div style="font-size:15px;font-weight:700;white-space:nowrap">${won(Number(s['월급'])||0)}</div>
       </div>
     </div>`
   }
@@ -1946,15 +1943,13 @@ function pgStaff(){
     <div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div>
-          <div style="font-size:12px;color:#64748b">${fb||'전체'} · ${ym} 지급완료</div>
+          <div style="font-size:12px;color:#64748b">${fb||'전체'} · ${ym} 직원급여</div>
           <div style="font-size:21px;font-weight:800;margin-top:2px">${won(total)}</div>
         </div>
-        <div style="font-size:12px;font-weight:700;color:${미지급?'#dc2626':'#16a34a'}">
-          ${미지급 ? '미지급 '+미지급+'명' : (list.length?'전원 완료':'—')}
-        </div>
+        <div style="font-size:12px;font-weight:700;color:#64748b">${list.length}명</div>
       </div>
       <div style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.5">
-        지급완료를 누르면 해당 지점 손익계산서의 <b>직원급여</b>로 들어갑니다.
+        등록해두면 매달 손익계산서 <b>직원급여</b>에 자동으로 잡힙니다. 따로 누를 것 없습니다.
       </div>
     </div>
 
@@ -1977,7 +1972,10 @@ function pgStaff(){
       </div>
     </details>`:''}
 
-    <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:14px" onclick="ST.loaded=false;staffReload()">새로고침</button>
+    <div class="flex gap-6" style="margin-top:14px">
+      <button class="btn btn-secondary btn-sm" style="flex:1" onclick="ST.loaded=false;staffReload()">새로고침</button>
+      <button class="btn btn-secondary btn-sm" style="flex:1" onclick="staffSyncMonth()">${ym} 손익 반영</button>
+    </div>
   </div>`
 }
 
@@ -2001,13 +1999,19 @@ function modalStaff(id=''){
       <div class="fg"><label class="flabel">월급 (원)</label>
         <input id="st-pay" class="finput" type="number" inputmode="numeric" placeholder="3000000" value="${s?(Number(s['월급'])||''):''}">
         <div style="font-size:11px;color:#94a3b8;margin-top:4px">실제 지급하는 금액 그대로. 세전·세후 구분 없습니다.</div></div>
-      <div class="fg"><label class="flabel">입사 연월</label>
-        <input id="st-start" class="finput" type="month" value="${시작}"></div>
-      <div class="fg"><label class="flabel">퇴사 연월</label>
-        <input id="st-end" class="finput" type="month" value="${종료}">
-        <div style="font-size:11px;color:#94a3b8;margin-top:4px">비워두면 재직중. 날짜를 넣으면 퇴사 처리되지만 지난 급여 기록은 남습니다.</div></div>
-      <div class="fg"><label class="flabel">메모</label>
-        <input id="st-memo" class="finput" placeholder="선택" value="${s?(s['메모']||''):''}"></div>
+      <details style="margin-top:4px">
+        <summary style="font-size:12px;color:#94a3b8;cursor:pointer;user-select:none;list-style:none;padding:6px 0">
+          ▸ 입사·퇴사 연월 (몰라도 됩니다)
+        </summary>
+        <div class="fg" style="margin-top:6px"><label class="flabel">입사 연월</label>
+          <input id="st-start" class="finput" type="month" value="${시작}">
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px">모르면 비워두세요. 예전부터 재직한 것으로 봅니다.</div></div>
+        <div class="fg"><label class="flabel">퇴사 연월</label>
+          <input id="st-end" class="finput" type="month" value="${종료}">
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px">넣으면 그달 이후 인건비에서 빠집니다. 지난 기록은 남습니다.</div></div>
+        <div class="fg"><label class="flabel">메모</label>
+          <input id="st-memo" class="finput" placeholder="선택" value="${s?(s['메모']||''):''}"></div>
+      </details>
       <div class="sheet-footer">
         <button class="btn btn-secondary" onclick="cm()">취소</button>
         <button class="btn btn-primary" onclick="staffSave('${id}')">저장</button>
@@ -2041,19 +2045,14 @@ async function staffSave(id){
   finally{ ST.busy = false }
 }
 
-async function staffTogglePay(id){
+/** 보고 있는 달의 직원급여를 손익계산서에 다시 반영 */
+async function staffSyncMonth(){
   if(ST.busy) return
-  const ym = ST.month
-  const paid = staffPaid(id, ym)
-  const s = ST.staff.find(x=>String(x['id'])===String(id))
-  if(paid && !confirm(`${s['이름']} ${ym} 지급을 취소할까요?\n손익계산서에서도 빠집니다.`)) return
-
   ST.busy = true
   try{
-    await staffFetch(paid ? 'staffUnpay' : 'staffPay', { id, ym })
-    toast(paid ? '지급 취소됨' : '✓ 지급완료 — 손익계산서 반영')
-    ST.loaded = false
-    await staffReload()
+    const r = await staffFetch('staffSync', { ym: ST.month })
+    const 합 = Object.keys(r.합계||{}).map(b=>b+' '+won(Number(r.합계[b])||0)).join(' / ')
+    toast('✓ ' + ST.month + ' 반영됨 — ' + (합 || '0원'))
   }catch(e){ toast('✗ ' + e.message) }
   finally{ ST.busy = false }
 }
