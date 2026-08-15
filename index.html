@@ -505,6 +505,7 @@ function renderTP(k,label){
 
 // 특정 날짜의 근무시간 반환 (예외 포함)
 function getHrsForDate(worker, ds) {
+  if(!employedOn(worker,ds)) return 0   // 입사 전 / 퇴사 후는 예외(다이어리)도 무시
   const dt=new Date(ds+'T00:00:00')
   const isWork=worker.workDays.includes(dt.getDay())
   const exc=S.exceptions.find(e=>e.wid===worker.id&&e.date===ds)
@@ -523,7 +524,29 @@ function getHrsForDate(worker, ds) {
 }
 
 // 특정 날짜의 정규 스케줄 시간만 반환 (예외 무시 — 전월/차월 크로스월 주휴 계산용)
+/**
+ * 그 날짜에 재직 중이었나
+ *
+ *   예전에는 요일만 봤다. 그래서 5월에 등록한 알바가 1월 달력에도
+ *   근무한 것으로 계산돼 과거 급여가 부풀려졌다.
+ *   퇴사자도 마찬가지로 퇴사 후 달까지 계속 잡혔다.
+ *
+ *   startYM 이 비어 있으면 "예전부터" 로 본다 (기존 데이터 호환).
+ *   resignDate 는 "마지막 근무월" 이라 그 달까지는 포함한다.
+ */
+function employedOn(worker, ds) {
+  return employedInMonth(worker, ds.slice(0,7))
+}
+function employedInMonth(worker, ym) {
+  const st=String(worker.startYM||'').trim()
+  const en=String(worker.resignDate||'').trim()
+  if(st && ym<st) return false
+  if(en && ym>en) return false
+  return true
+}
+
 function getRegHrsForDate(worker, ds) {
+  if(!employedOn(worker,ds)) return 0
   const dt=new Date(ds+'T00:00:00')
   const isWork=worker.workDays.includes(dt.getDay())
   return isWork?dailyHours(worker):0
@@ -705,8 +728,10 @@ function deleteBranch(id){
 function pgWorkers(){
   const fb=S.filterBranch,ym=S.month,{y,m}=parseYM(ym)
   const allWs=fb?S.workers.filter(w=>w.branchId===fb):S.workers
-  const ws=allWs.filter(w=>!w.resigned)
-  const resignedWs=allWs.filter(w=>w.resigned)
+  // 보고 있는 달에 재직한 사람만 카드로 띄운다.
+  // 퇴사자라도 그 달에 일했으면 나와야 과거 급여를 확인할 수 있다.
+  const ws=allWs.filter(w=>employedInMonth(w,ym))
+  const resignedWs=allWs.filter(w=>!employedInMonth(w,ym))
   const fixedWs=ws.filter(w=>w.fixed!==false)
   const flexWs=ws.filter(w=>w.fixed===false)
 
@@ -763,23 +788,37 @@ function pgWorkers(){
   </div>
   <div class="pcontent">
     <div class="pills" style="margin-bottom:12px">${pills}</div>
+    ${orphanPayments().length?`
+      <div class="card" style="margin-bottom:12px;background:#fef2f2;border-color:#fecaca">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div style="font-size:12px;color:#b91c1c;line-height:1.5">
+            ⚠️ 삭제된 알바의 지급 기록 ${orphanPayments().length}명분<br>
+            <span style="color:#dc2626;font-weight:700">${won(orphanPayments().reduce((a,o)=>a+o.합계,0))}</span>
+            이 손익계산서에 안 잡히고 있습니다
+          </div>
+          <button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="modalOrphan()">복구</button>
+        </div>
+      </div>`:''}
     ${ws.length===0
       ?`<div class="card"><div class="empty"><p>${S.branches.length===0?'먼저 지점을 등록해주세요':'등록된 알바생이 없습니다'}</p></div></div>`
       :`${fixedSection}${flexSection}`}
     ${resignedWs.length>0?`
     <details style="margin-top:16px">
       <summary style="font-size:12px;font-weight:700;color:#94a3b8;cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:4px">
-        <span>▶</span> 퇴사자 (${resignedWs.length}명)
+        <span>▶</span> 이 달 근무 안 함 (${resignedWs.length}명)
       </summary>
       <div style="margin-top:8px">
-        ${resignedWs.map(w=>`
+        ${resignedWs.map(w=>{
+          const st=String(w.startYM||'').trim(), en=String(w.resignDate||'').trim()
+          const 사유 = (st && ym<st) ? st+' 입사 예정' : (en ? en+'까지 근무' : '')
+          return`
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#f8fafc;border-radius:10px;margin-bottom:6px">
           <div>
             <span style="font-weight:700;color:#94a3b8">${w.name}</span>
-            <span style="font-size:11px;color:#cbd5e1;margin-left:6px">${branchName(w.branchId)} · ${w.resignDate}까지</span>
+            <span style="font-size:11px;color:#cbd5e1;margin-left:6px">${branchName(w.branchId)} · ${사유}</span>
           </div>
-          <button class="btn btn-secondary btn-sm" onclick="undoResign('${w.id}')" style="font-size:11px;padding:4px 10px">복직</button>
-        </div>`).join('')}
+          ${w.resigned?`<button class="btn btn-secondary btn-sm" onclick="undoResign('${w.id}')" style="font-size:11px;padding:4px 10px">복직</button>`:''}
+        </div>`}).join('')}
       </div>
     </details>`:''}
   </div>`
@@ -825,9 +864,16 @@ function modalWorker(id=''){
           ${renderTP('end','퇴근 시간')}
         </div>
       </div>
-      <div class="fg">
-        <label class="flabel">시급 (원)</label>
-        <input id="w-wage" class="finput" type="number" inputmode="numeric" placeholder="10030" value="${w?.hourlyWage||10030}">
+      <div class="grid-2">
+        <div class="fg">
+          <label class="flabel">시급 (원)</label>
+          <input id="w-wage" class="finput" type="number" inputmode="numeric" placeholder="10030" value="${w?.hourlyWage||10030}">
+        </div>
+        <div class="fg">
+          <label class="flabel">입사 연월</label>
+          <input id="w-start" class="finput" type="month" value="${w?.startYM||(w?'':S.month)}">
+          <div class="fhint">이 달부터 급여가 계산됩니다</div>
+        </div>
       </div>
       <div class="sheet-footer">
         <button class="btn btn-secondary" onclick="cm()">취소</button>
@@ -850,6 +896,7 @@ function saveWorker(id){
   const name=document.getElementById('w-name').value.trim()
   const branchId=document.getElementById('w-branch').value
   const hourlyWage=parseInt(document.getElementById('w-wage').value)||0
+  const startYM=(document.getElementById('w-start')?.value||'').trim()
   if(!name){toast('이름을 입력해주세요');return}
   if(!branchId){toast('지점을 선택해주세요');return}
   let data
@@ -859,13 +906,90 @@ function saveWorker(id){
     if(!workDays.length){toast('근무일을 선택해주세요');return}
     const [sh,sm]=startTime.split(':').map(Number),[eh,em]=endTime.split(':').map(Number)
     if(sh*60+sm===eh*60+em){toast('출근·퇴근 시간이 같습니다');return}
-    data={name,branchId,startTime,endTime,hourlyWage,workDays,fixed:true}
+    data={name,branchId,startTime,endTime,hourlyWage,workDays,fixed:true,startYM}
   } else {
-    data={name,branchId,startTime:'09:00',endTime:'18:00',hourlyWage,workDays:[],fixed:false}
+    data={name,branchId,startTime:'09:00',endTime:'18:00',hourlyWage,workDays:[],fixed:false,startYM}
   }
   if(id){const w=S.workers.find(x=>x.id===id);if(w)Object.assign(w,data)}
   else S.workers.push({id:uid(),...data})
   save();cm();navigate('workers');toast(id?'수정됐습니다':'등록됐습니다')
+}
+
+// ══════════════════════════════════════════════════════════
+// 끊긴 지급 기록 복구
+//
+//  퇴사 기능(soft delete)이 생기기 전에는 알바를 지우면 workers 에서
+//  사라졌다. 그런데 지급 기록(payments)은 그대로 남는다.
+//  그러면 wid 로 사람을 못 찾아 그 급여가 어느 지점에도 안 잡힌다.
+//
+//  새로 등록하면 새 id 가 생겨서 옛 기록과 안 붙는다.
+//  그래서 원래 id 를 그대로 쓰는 복구 경로가 필요하다.
+// ══════════════════════════════════════════════════════════
+function orphanPayments(){
+  const ids=new Set(S.workers.map(w=>w.id))
+  const map={}
+  S.payments.forEach(p=>{
+    if(ids.has(p.wid)) return
+    if(!map[p.wid]) map[p.wid]={wid:p.wid,건수:0,합계:0,months:[]}
+    map[p.wid].건수++
+    map[p.wid].합계+=Number(p.gross)||0
+    map[p.wid].months.push(p.ym)
+  })
+  return Object.values(map)
+}
+
+function modalOrphan(){
+  const list=orphanPayments()
+  if(!list.length){toast('끊긴 기록이 없습니다');return}
+  mc(`<div class="sheet-overlay" onclick="if(event.target===this)cm()">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header"><div class="sheet-title">끊긴 지급 기록 복구</div><button class="sheet-close" onclick="cm()">×</button></div>
+      <div class="fhint" style="margin-bottom:12px">
+        예전에 삭제된 알바의 지급 기록입니다. 이름·지점을 넣으면 <b>원래 기록 그대로</b> 되살아나고
+        손익계산서에도 다시 잡힙니다.
+      </div>
+      ${list.map((o,i)=>`
+        <div class="card" style="margin-bottom:12px;padding:12px 14px">
+          <div style="font-size:12px;color:#64748b;margin-bottom:8px">
+            ${o.months.sort().join(' · ')} · ${o.건수}건 · <b>${won(o.합계)}</b>
+          </div>
+          <div class="grid-2">
+            <div class="fg"><label class="flabel">이름</label>
+              <input id="orp-name-${i}" class="finput" placeholder="예: 강형모"></div>
+            <div class="fg"><label class="flabel">지점</label>
+              <select id="orp-branch-${i}" class="fselect">
+                ${S.branches.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}
+              </select></div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="width:100%"
+                  onclick="restoreOrphan('${o.wid}',${i},'${o.months.sort()[o.months.length-1]}')">복구</button>
+        </div>`).join('')}
+      <div class="sheet-footer">
+        <button class="btn btn-secondary" style="width:100%" onclick="cm()">닫기</button>
+      </div>
+    </div>
+  </div>`)
+}
+
+function restoreOrphan(wid,i,lastYM){
+  const name=document.getElementById('orp-name-'+i).value.trim()
+  const branchId=document.getElementById('orp-branch-'+i).value
+  if(!name){toast('이름을 입력해주세요');return}
+  if(!branchId){toast('지점을 선택해주세요');return}
+  if(S.workers.some(w=>w.id===wid)){toast('이미 복구되어 있습니다');return}
+
+  const months=S.payments.filter(p=>p.wid===wid).map(p=>p.ym).sort()
+  S.workers.push({
+    id:wid,                       // ★ 원래 id 유지 — 이래야 옛 기록과 연결된다
+    name, branchId,
+    startTime:'09:00', endTime:'18:00', hourlyWage:10030,
+    workDays:[], fixed:false,     // 과거 기록 보존용이라 스케줄은 비운다
+    startYM:months[0]||'',
+    resigned:true, resignDate:lastYM,
+  })
+  save(); cm(); renderPage('workers')
+  toast(`${name} 복구됨 (${months[0]}~${lastYM})`)
 }
 
 function resignWorker(id){
