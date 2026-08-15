@@ -455,6 +455,60 @@ function dailyHours(w) {
   return mins/60
 }
 
+// ══════════════════════════════════════════════════════════
+// 조건 이력 (terms)
+//
+//  예전에는 알바 1명 = 시급 1개 + 근무시간 1개 였다.
+//  그래서 9월에 시급을 올리면 7·8월까지 같이 올라갔고,
+//  요일마다 출근 시간을 다르게 줄 수도 없었다.
+//
+//  이제 조건을 "언제부터" 와 함께 쌓는다.
+//    terms: [
+//      { from:'',        hourlyWage:10030, days:{1:{start,end}, 4:{...}} },
+//      { from:'2026-09', hourlyWage:11000, days:{...} },
+//    ]
+//  각 달은 그 달에 해당하는 조건으로 계산된다.
+//
+//  terms 가 없는 기존 데이터는 예전 필드를 읽어 "예전부터" 조건 하나로 본다.
+// ══════════════════════════════════════════════════════════
+function hoursBetween(s,e){
+  if(!s||!e) return 0
+  const[sh,sm]=String(s).split(':').map(Number)
+  const[eh,em]=String(e).split(':').map(Number)
+  let mins=(eh*60+em)-(sh*60+sm)
+  if(mins<=0) mins+=1440
+  return mins/60
+}
+
+/** 구버전 워커(요일 공통 시간)를 조건 하나로 변환 */
+function legacyTerm(w){
+  const days={}
+  ;(w.workDays||[]).forEach(d=>{ days[d]={start:w.startTime||'09:00',end:w.endTime||'18:00'} })
+  return{from:'',hourlyWage:w.hourlyWage||0,fixed:w.fixed!==false,days}
+}
+function termsOf(w){
+  if(Array.isArray(w.terms)&&w.terms.length){
+    return w.terms.slice().sort((a,b)=>String(a.from||'').localeCompare(String(b.from||'')))
+  }
+  return[legacyTerm(w)]
+}
+/** 그 달에 적용되는 조건 */
+function termFor(w,ym){
+  const ts=termsOf(w)
+  let cur=ts[0]
+  ts.forEach(t=>{ const f=String(t.from||''); if(!f||f<=ym) cur=t })
+  return cur
+}
+/** 그 요일에 근무하나 */
+function termWorks(term,dow){ return !!(term&&term.days&&term.days[dow]) }
+/** 그 요일 근무시간 */
+function termDayHours(term,dow){
+  const d=term&&term.days&&term.days[dow]
+  return d?hoursBetween(d.start,d.end):0
+}
+/** 그 달 시급 */
+function wageOf(w,ym){ return Number(termFor(w,ym).hourlyWage)||0 }
+
 // ────────────────────────────────────────
 // TIME PICKER
 // ────────────────────────────────────────
@@ -507,9 +561,10 @@ function renderTP(k,label){
 function getHrsForDate(worker, ds) {
   if(!employedOn(worker,ds)) return 0   // 입사 전 / 퇴사 후는 예외(다이어리)도 무시
   const dt=new Date(ds+'T00:00:00')
-  const isWork=worker.workDays.includes(dt.getDay())
+  const term=termFor(worker,ds.slice(0,7))
+  const isWork=termWorks(term,dt.getDay())
   const exc=S.exceptions.find(e=>e.wid===worker.id&&e.date===ds)
-  const regH=dailyHours(worker)
+  const regH=termDayHours(term,dt.getDay())
   if(exc){
     if(exc.type==='absent')  return 0
     if(exc.type==='override') return exc.hours
@@ -547,21 +602,22 @@ function employedInMonth(worker, ym) {
 
 function getRegHrsForDate(worker, ds) {
   if(!employedOn(worker,ds)) return 0
-  const dt=new Date(ds+'T00:00:00')
-  const isWork=worker.workDays.includes(dt.getDay())
-  return isWork?dailyHours(worker):0
+  const term=termFor(worker,ds.slice(0,7))
+  return termDayHours(term,new Date(ds+'T00:00:00').getDay())
 }
 
 function calcPayroll(worker, ym) {
   const {y,m}=parseYM(ym)
   const dim=daysInMonth(y,m)
+  const term=termFor(worker,ym)          // 그 달에 적용되는 조건
+  const wage=Number(term.hourlyWage)||0
 
   // ① 기본급: 해당 월에 실제 근무한 날만 집계
   const log=[]
   for(let d=1;d<=dim;d++){
     const dt=new Date(y,m-1,d), dow=dt.getDay(), ds=dateStr(dt)
     const hrs=getHrsForDate(worker,ds)
-    log.push({d,dow,ds,isWork:worker.workDays.includes(dow),hrs})
+    log.push({d,dow,ds,isWork:termWorks(term,dow),hrs})
   }
 
   // ② 주휴수당: 일요일이 해당 월에 있는 주(월~일)만 귀속
@@ -581,7 +637,7 @@ function calcPayroll(worker, ym) {
       wH+=(day.getFullYear()===y&&day.getMonth()+1===m)?getHrsForDate(worker,dayDs):getRegHrsForDate(worker,dayDs)
     }
     const cappedWH=Math.min(wH,40) // 주휴수당 산정 기준 최대 40h (법정 한도)
-    const j=wH>=15?(cappedWH/40)*8*worker.hourlyWage:0
+    const j=wH>=15?(cappedWH/40)*8*wage:0
     weeks.push({
       label:`${monday.getMonth()+1}/${monday.getDate()}~${sunday.getMonth()+1}/${sunday.getDate()}`,
       hours:wH, juHyu:j, ok:wH>=15
@@ -590,7 +646,7 @@ function calcPayroll(worker, ym) {
   }
 
   const totalHours=log.reduce((s,l)=>s+l.hrs,0)
-  const basePay=totalHours*worker.hourlyWage
+  const basePay=totalHours*wage
   const gross=basePay+totalJuHyu
   const tax=calcTax(gross)
   return{worker,totalHours,totalJuHyu,basePay,gross,tax,net:gross-tax.total,log,weeks}
@@ -826,12 +882,26 @@ function pgWorkers(){
 
 let _wFixed=true
 
+// ══════════════════════════════════════════════════════════
+// 알바 등록 / 수정
+//
+//  요일마다 출근 시간이 다를 수 있다 (월 17시, 목 18시).
+//  예전에는 시간이 하나뿐이라 비고정이나 예외로 우회해야 했다.
+//
+//  조건을 바꾸면 "언제부터" 를 묻고 이력으로 쌓는다.
+//  그래야 9월에 시급을 올려도 7·8월이 안 흔들린다.
+// ══════════════════════════════════════════════════════════
+let _wDays = {}          // {요일: {start,end}} 편집 중인 근무표
+
 function modalWorker(id=''){
-  const w=id?S.workers.find(x=>x.id===id):null
-  const selDays=w?.workDays||[1,2,3,4,5]
-  _tp.start=timeToTP(w?.startTime||'09:00')
-  _tp.end=timeToTP(w?.endTime||'18:00')
-  _wFixed=w?w.fixed!==false:true
+  const w = id ? S.workers.find(x=>x.id===id) : null
+  const term = w ? termFor(w, S.month) : null
+  _wFixed = w ? (term.fixed!==false) : true
+
+  // 편집 대상: 보고 있는 달의 조건
+  _wDays = {}
+  if(term && term.days) Object.keys(term.days).forEach(d=>{ _wDays[d]={...term.days[d]} })
+  if(!w) _wDays = {1:{start:'18:00',end:'23:00'}}
 
   mc(`<div class="sheet-overlay" onclick="if(event.target===this)cm()">
     <div class="sheet">
@@ -846,41 +916,99 @@ function modalWorker(id=''){
           </select>
         </div>
       </div>
+
       <div class="fg">
         <label class="flabel">근무 유형</label>
         <div style="display:flex;gap:8px;margin-bottom:6px">
           <button type="button" id="wtype-fixed" class="btn ${_wFixed?'btn-primary':'btn-secondary'} btn-sm" style="flex:1" onclick="setWFixed(true)">📌 고정</button>
           <button type="button" id="wtype-flex"  class="btn ${!_wFixed?'btn-primary':'btn-secondary'} btn-sm" style="flex:1" onclick="setWFixed(false)">🔄 비고정</button>
         </div>
-        <div class="fhint" id="wtype-hint">${_wFixed?'매주 정해진 요일·시간에 근무':'근무일이 매번 달라질 때 — 다이어리로 입력'}</div>
+        <div class="fhint" id="wtype-hint">${_wFixed?'요일마다 시간을 따로 정할 수 있습니다':'근무일이 매번 달라질 때 — 다이어리로 입력'}</div>
       </div>
+
       <div id="fixed-fields" style="${_wFixed?'':'display:none'}">
         <div class="fg">
           <label class="flabel">정기 근무일</label>
-          <div class="day-sel">${[0,1,2,3,4,5,6].map(d=>`<div class="day-btn ${selDays.includes(d)?'selected':''}" data-day="${d}" onclick="this.classList.toggle('selected')">${DAY_KO[d]}</div>`).join('')}</div>
+          <div class="day-sel">${[0,1,2,3,4,5,6].map(d=>
+            `<div class="day-btn ${_wDays[d]?'selected':''}" data-day="${d}" onclick="toggleWDay(${d})">${DAY_KO[d]}</div>`
+          ).join('')}</div>
         </div>
-        <div class="grid-2">
-          ${renderTP('start','출근 시간')}
-          ${renderTP('end','퇴근 시간')}
+        <div class="fg">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label class="flabel" style="margin:0">요일별 근무시간</label>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size:11px;padding:4px 10px" onclick="copyFirstDayTime()">첫 요일과 동일하게</button>
+          </div>
+          <div id="wday-times"></div>
         </div>
       </div>
+
       <div class="grid-2">
         <div class="fg">
           <label class="flabel">시급 (원)</label>
-          <input id="w-wage" class="finput" type="number" inputmode="numeric" placeholder="10030" value="${w?.hourlyWage||10030}">
+          <input id="w-wage" class="finput" type="number" inputmode="numeric" placeholder="10030" value="${term?.hourlyWage||10030}">
         </div>
         <div class="fg">
           <label class="flabel">입사 연월</label>
           <input id="w-start" class="finput" type="month" value="${w?.startYM||(w?'':S.month)}">
-          <div class="fhint">이 달부터 급여가 계산됩니다</div>
+          <div class="fhint">${w?'비우면 예전부터':'이 달부터 계산'}</div>
         </div>
       </div>
+
+      ${w?`
+      <div class="fg">
+        <label class="flabel">바뀐 내용을 언제부터 적용할까요?</label>
+        <select id="w-apply" class="fselect">
+          <option value="${S.month}">${S.month} 부터 (이전 달은 그대로)</option>
+          <option value="__all__">처음부터 — 잘못 입력한 것 정정</option>
+        </select>
+        <div class="fhint">지급완료한 달은 어느 쪽이든 금액이 바뀌지 않습니다</div>
+      </div>`:''}
+
       <div class="sheet-footer">
         <button class="btn btn-secondary" onclick="cm()">취소</button>
         <button class="btn btn-primary" onclick="saveWorker('${id}')">저장</button>
       </div>
     </div>
   </div>`)
+  renderWDayTimes()
+}
+
+const TIME_OPTS = (()=>{ const o=[]; BIZ_HOURS.forEach(h=>{ o.push(String(h).padStart(2,'0')+':00'); o.push(String(h).padStart(2,'0')+':30') }); return o })()
+
+function renderWDayTimes(){
+  const box=document.getElementById('wday-times'); if(!box) return
+  const days=Object.keys(_wDays).map(Number).sort()
+  if(!days.length){ box.innerHTML='<div class="fhint">위에서 근무일을 선택하세요</div>'; return }
+  box.innerHTML=days.map(d=>`
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="width:24px;font-weight:700;color:#4f46e5">${DAY_KO[d]}</span>
+      <select class="fselect" style="flex:1" onchange="setWDayTime(${d},'start',this.value)">
+        ${TIME_OPTS.map(t=>`<option value="${t}" ${_wDays[d].start===t?'selected':''}>${t}</option>`).join('')}
+      </select>
+      <span style="color:#94a3b8">~</span>
+      <select class="fselect" style="flex:1" onchange="setWDayTime(${d},'end',this.value)">
+        ${TIME_OPTS.map(t=>`<option value="${t}" ${_wDays[d].end===t?'selected':''}>${t}</option>`).join('')}
+      </select>
+      <span style="width:44px;text-align:right;font-size:12px;color:#64748b">${hoursBetween(_wDays[d].start,_wDays[d].end).toFixed(1)}h</span>
+    </div>`).join('')
+}
+
+function toggleWDay(d){
+  if(_wDays[d]) delete _wDays[d]
+  else {
+    const first=Object.keys(_wDays).map(Number).sort()[0]
+    _wDays[d]= first!==undefined ? {..._wDays[first]} : {start:'18:00',end:'23:00'}
+  }
+  document.querySelector(`.day-btn[data-day="${d}"]`)?.classList.toggle('selected', !!_wDays[d])
+  renderWDayTimes()
+}
+function setWDayTime(d,k,v){ if(_wDays[d]){ _wDays[d][k]=v; renderWDayTimes() } }
+function copyFirstDayTime(){
+  const days=Object.keys(_wDays).map(Number).sort()
+  if(days.length<2) return
+  const f=_wDays[days[0]]
+  days.forEach(d=>{ _wDays[d]={...f} })
+  renderWDayTimes(); toast('모든 요일을 '+f.start+'~'+f.end+' 으로 맞췄습니다')
 }
 
 function setWFixed(val){
@@ -889,7 +1017,7 @@ function setWFixed(val){
   document.getElementById('wtype-flex').className='btn '+(!val?'btn-primary':'btn-secondary')+' btn-sm'
   document.getElementById('fixed-fields').style.display=val?'':'none'
   const h=document.getElementById('wtype-hint')
-  if(h) h.textContent=val?'매주 정해진 요일·시간에 근무':'근무일이 매번 달라질 때 — 다이어리로 입력'
+  if(h) h.textContent=val?'요일마다 시간을 따로 정할 수 있습니다':'근무일이 매번 달라질 때 — 다이어리로 입력'
 }
 
 function saveWorker(id){
@@ -899,20 +1027,38 @@ function saveWorker(id){
   const startYM=(document.getElementById('w-start')?.value||'').trim()
   if(!name){toast('이름을 입력해주세요');return}
   if(!branchId){toast('지점을 선택해주세요');return}
-  let data
+
+  let days={}
   if(_wFixed){
-    const startTime=getTPTime('start'),endTime=getTPTime('end')
-    const workDays=[...document.querySelectorAll('.day-btn.selected')].map(el=>parseInt(el.dataset.day))
-    if(!workDays.length){toast('근무일을 선택해주세요');return}
-    const [sh,sm]=startTime.split(':').map(Number),[eh,em]=endTime.split(':').map(Number)
-    if(sh*60+sm===eh*60+em){toast('출근·퇴근 시간이 같습니다');return}
-    data={name,branchId,startTime,endTime,hourlyWage,workDays,fixed:true,startYM}
-  } else {
-    data={name,branchId,startTime:'09:00',endTime:'18:00',hourlyWage,workDays:[],fixed:false,startYM}
+    const ds=Object.keys(_wDays)
+    if(!ds.length){toast('근무일을 선택해주세요');return}
+    for(const d of ds){
+      if(hoursBetween(_wDays[d].start,_wDays[d].end)<=0){toast(DAY_KO[d]+'요일 시간을 확인해주세요');return}
+      days[d]={..._wDays[d]}
+    }
   }
-  if(id){const w=S.workers.find(x=>x.id===id);if(w)Object.assign(w,data)}
-  else S.workers.push({id:uid(),...data})
-  save();cm();navigate('workers');toast(id?'수정됐습니다':'등록됐습니다')
+  const newTerm={hourlyWage,fixed:_wFixed,days}
+
+  if(!id){
+    S.workers.push({id:uid(),name,branchId,startYM,terms:[{from:startYM||'',...newTerm}]})
+    save();cm();navigate('workers');toast('등록됐습니다')
+    return
+  }
+
+  const w=S.workers.find(x=>x.id===id); if(!w) return
+  w.name=name; w.branchId=branchId; w.startYM=startYM
+
+  const apply=document.getElementById('w-apply')?.value||S.month
+  const ts=termsOf(w)
+  if(apply==='__all__'){
+    // 잘못 입력한 것을 고치는 경우 — 이력을 하나로 정리한다
+    w.terms=[{from:startYM||'',...newTerm}]
+  }else{
+    const same=ts.filter(t=>String(t.from||'')===apply)
+    if(same.length) w.terms=ts.map(t=>String(t.from||'')===apply?{from:apply,...newTerm}:t)
+    else            w.terms=ts.concat([{from:apply,...newTerm}])
+  }
+  save();cm();navigate('workers');toast('수정됐습니다')
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1017,8 +1163,19 @@ function undoResign(id){
 function pgPayroll(){
   const ym=S.month,{y,m}=parseYM(ym)
   const fb=S.filterBranch
-  const ws=(fb?S.workers.filter(w=>w.branchId===fb):S.workers).filter(w=>!w.resigned||w.resignDate>=ym)
-  const results=ws.map(w=>calcPayroll(w,ym))
+  const ws=(fb?S.workers.filter(w=>w.branchId===fb):S.workers).filter(w=>employedInMonth(w,ym))
+  // 지급완료한 달은 그때 확정된 금액을 그대로 보여준다.
+  // 나중에 시급·스케줄을 고쳐도 확정된 과거가 흔들리면 안 된다.
+  // (삭제됐다 복구된 알바처럼 스케줄이 없어도 금액이 제대로 나온다)
+  const results=ws.map(w=>{
+    const p=S.payments.find(x=>x.wid===w.id&&x.ym===ym)
+    const r=calcPayroll(w,ym)
+    if(!p) return r
+    return{...r,
+      gross:Number(p.gross)||0, net:Number(p.net)||0,
+      basePay:Number(p.basePay)||0, totalJuHyu:Number(p.juHyu)||0,
+      확정:true}
+  })
   const tGross=results.reduce((s,r)=>s+r.gross,0)
   const tNet=results.reduce((s,r)=>s+r.net,0)
   const tJu=results.reduce((s,r)=>s+r.totalJuHyu,0)
@@ -1113,7 +1270,7 @@ function modalPayDetail(wid,ym){
       <div class="sheet-header"><div class="sheet-title">${w.name} · ${y}년 ${m}월</div><button class="sheet-close" onclick="cm()">×</button></div>
       <div class="pay-block">
         <div class="pay-row"><span>근무시간</span><span>${r.totalHours.toFixed(1)}시간</span></div>
-        <div class="pay-row"><span>시급</span><span>${won(w.hourlyWage)}</span></div>
+        <div class="pay-row"><span>시급</span><span>${won(wageOf(w,ym))}</span></div>
         <div class="pay-row"><span>기본급</span><span>${won(r.basePay)}</span></div>
         <div class="pay-row plus"><span>주휴수당</span><span>+${won(r.totalJuHyu)}</span></div>
         <div class="pay-row total"><span>세전 합계</span><span>${won(r.gross)}</span></div>
@@ -1206,12 +1363,14 @@ function modalException(wid,ym){
   const w=S.workers.find(x=>x.id===wid); if(!w) return
   const isFlx=w.fixed===false
   const{y,m}=parseYM(ym),dim=daysInMonth(y,m)
-  const firstDow=new Date(y,m-1,1).getDay(),regH=dailyHours(w)
+  const firstDow=new Date(y,m-1,1).getDay()
+  const _term=termFor(w,ym)
   const cells=[]
   for(let i=0;i<firstDow;i++) cells.push('<div class="cal-day empty"></div>')
   for(let d=1;d<=dim;d++){
     const dt=new Date(y,m-1,d),dow=dt.getDay(),ds=dateStr(dt)
-    const isWork=!isFlx&&w.workDays.includes(dow)
+    const isWork=!isFlx&&termWorks(_term,dow)
+    const regH=termDayHours(_term,dow)
     const exc=S.exceptions.find(e=>e.wid===wid&&e.date===ds)
     let cls=isWork?'work':'nowork',badge=''
     if(exc){
@@ -1329,8 +1488,9 @@ function showTimeModal(wid,ds,ym,isBatch){
   const w=S.workers.find(x=>x.id===wid)
   const exc=isBatch?null:S.exceptions.find(e=>e.wid===wid&&e.date===ds)
   // 기존 예외 시간 또는 근무자 기본 시간으로 초기화
-  _excTp.start=excTpFromStr(exc?.startTime||w.startTime||'09:00')
-  _excTp.end=excTpFromStr(exc?.endTime||w.endTime||'18:00')
+  const _d0=(termFor(w,(ds||'').slice(0,7)).days||{})[new Date(ds+'T00:00:00').getDay()]||{}
+  _excTp.start=excTpFromStr(exc?.startTime||_d0.start||'09:00')
+  _excTp.end=excTpFromStr(exc?.endTime||_d0.end||'18:00')
   const dt=isBatch?null:new Date(ds+'T00:00:00')
   const titleLabel=isBatch
     ?`🕐 ${_excMultiSel.size}일 시각 일괄 변경`
@@ -1460,7 +1620,7 @@ function doBatchHours(wid,ym){
   const dates=[..._excMultiSel]
   dates.forEach(ds=>{
     const dow=new Date(ds+'T00:00:00').getDay()
-    const isWork=w.fixed!==false&&w.workDays.includes(dow)
+    const isWork=w.fixed!==false&&termWorks(termFor(w,ym),dow)
     S.exceptions=S.exceptions.filter(e=>!(e.wid===wid&&e.date===ds))
     S.exceptions.push({id:uid(),wid,date:ds,type:isWork?'override':'extra',hours:h})
   })
