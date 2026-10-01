@@ -492,6 +492,13 @@ function termsOf(w){
   }
   return[legacyTerm(w)]
 }
+/** 그 달에 고정인가 — ⚠️ w.fixed 를 보지 말 것 (2026-10-01)
+ *  w.fixed 는 조건(terms)이 생기기 전의 옛 표시입니다. 수정해도 안 바뀝니다.
+ *  김근영: 비고정으로 입사 → 2026-08 부터 고정. 그런데 다이어리가 w.fixed(false)를 봐서
+ *  근무일이 안 뜨고 결근을 못 넣었습니다. 급여는 조건(고정)으로 계산되고 있었습니다.
+ *  → 고정/비고정은 반드시 「그 달의 조건」으로 봅니다 */
+function isFixedIn(w,ym){ return termFor(w,ym||S.month).fixed!==false }
+
 /** 그 달에 적용되는 조건 */
 function termFor(w,ym){
   const ts=termsOf(w)
@@ -691,8 +698,8 @@ function pgDashboard(){
     const ws=S.workers.filter(w=>w.branchId===b.id&&(!w.resigned||w.resignDate>=ym))
     let bg=0,bn=0,bju=0
     ws.forEach(w=>{const r=calcPayroll(w,ym);bg+=r.gross;bn+=r.net;bju+=r.totalJuHyu})
-    const fixedCnt=ws.filter(w=>w.fixed!==false).length
-    const flexCnt=ws.filter(w=>w.fixed===false).length
+    const fixedCnt=ws.filter(w=>isFixedIn(w)).length
+    const flexCnt=ws.filter(w=>!isFixedIn(w)).length
     const sub=[fixedCnt?`고정 ${fixedCnt}명`:'',flexCnt?`비고정 ${flexCnt}명`:''].filter(Boolean).join(' · ')
     return`<div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);border-radius:18px;padding:18px;margin-bottom:12px;color:white">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -788,8 +795,8 @@ function pgWorkers(){
   // 퇴사자라도 그 달에 일했으면 나와야 과거 급여를 확인할 수 있다.
   const ws=allWs.filter(w=>employedInMonth(w,ym))
   const resignedWs=allWs.filter(w=>!employedInMonth(w,ym))
-  const fixedWs=ws.filter(w=>w.fixed!==false)
-  const flexWs=ws.filter(w=>w.fixed===false)
+  const fixedWs=ws.filter(w=>isFixedIn(w))
+  const flexWs=ws.filter(w=>!isFixedIn(w))
 
   const pills=`<div class="pill ${!fb?'active':''}" onclick="S.filterBranch='';renderPage('workers')">전체</div>
     ${S.branches.map(b=>`<div class="pill ${fb===b.id?'active':''}" onclick="S.filterBranch='${b.id}';renderPage('workers')">${b.name}</div>`).join('')}`
@@ -798,7 +805,7 @@ function pgWorkers(){
     return list.map(w=>{
       const r=calcPayroll(w,ym)
       const isPaid=S.payments.some(p=>p.wid===w.id&&p.ym===ym)
-      const isFlx=w.fixed===false
+      const isFlx=!isFixedIn(w)
       return`<div class="wcard">
         <button class="wcard-del" onclick="event.stopPropagation();resignWorker('${w.id}')">퇴사</button>
         <div class="wcard-body" onclick="modalPayDetail('${w.id}','${ym}')">
@@ -1047,6 +1054,7 @@ function saveWorker(id){
 
   const w=S.workers.find(x=>x.id===id); if(!w) return
   w.name=name; w.branchId=branchId; w.startYM=startYM
+  w.fixed=_wFixed   // 옛 표시도 맞춰 둡니다 — 읽는 곳은 isFixedIn 으로 바꿨지만 어긋난 채 두지 않습니다
 
   const apply=document.getElementById('w-apply')?.value||S.month
   const ts=termsOf(w)
@@ -1361,7 +1369,7 @@ function renderExcTP(k,label){
 function modalException(wid,ym){
   ym=ym||S.month
   const w=S.workers.find(x=>x.id===wid); if(!w) return
-  const isFlx=w.fixed===false
+  const isFlx=!isFixedIn(w,ym)
   const{y,m}=parseYM(ym),dim=daysInMonth(y,m)
   const firstDow=new Date(y,m-1,1).getDay()
   const _term=termFor(w,ym)
@@ -1620,7 +1628,7 @@ function doBatchHours(wid,ym){
   const dates=[..._excMultiSel]
   dates.forEach(ds=>{
     const dow=new Date(ds+'T00:00:00').getDay()
-    const isWork=w.fixed!==false&&termWorks(termFor(w,ym),dow)
+    const isWork=isFixedIn(w,ym)&&termWorks(termFor(w,ym),dow)
     S.exceptions=S.exceptions.filter(e=>!(e.wid===wid&&e.date===ds))
     S.exceptions.push({id:uid(),wid,date:ds,type:isWork?'override':'extra',hours:h})
   })
