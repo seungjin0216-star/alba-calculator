@@ -81,7 +81,24 @@ nav button b{font-size:21px;font-weight:400}nav button[aria-current="page"]{colo
 .calc .r.net{font-size:19px;font-weight:800;color:var(--accent)}
 .toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#191F28;color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none;max-width:90%}.toast.show{opacity:1}
 #busy{position:fixed;inset:0;z-index:40;background:#0004;display:none;align-items:center;justify-content:center}#busy.show{display:flex}
-#busy div{background:var(--surface);border-radius:16px;padding:16px 22px;font-weight:700}
+#busy>div{background:var(--surface);border-radius:16px;padding:16px 22px;font-weight:700}
+/* 26-10-28 사장님 「지급 시: 사장과 알바 아이콘이 각각 있고 그 사이로 사장 돈이 알바 통장으로 들어가게 · 지급 취소 시: 알바 통장에 적힌 급여가 지우개로 지워지는 모션」 */
+#busy>.ani{width:300px;text-align:center;padding:20px 16px 16px}
+.ani .row{display:flex;align-items:flex-end;justify-content:space-between;height:96px;position:relative}
+.ani .who{font-size:42px;line-height:1;width:74px;text-align:center}.ani .who small{display:block;font-size:12px;font-weight:600;color:var(--sub,#888);margin-top:6px}
+.ani .bank{width:118px;border-radius:12px;background:#eef4ff;border:1px solid #c9d8f5;padding:7px 6px;font-size:12px;color:#234;text-align:left;position:relative;overflow:hidden}
+.ani .bank b{display:block;font-size:11px;color:#678;font-weight:600}.ani .bank .amt{font-size:13px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ani .bill{position:absolute;left:62px;bottom:46px;font-size:24px;animation:billFly 1.3s cubic-bezier(.45,.05,.4,1) infinite;opacity:0}
+.ani .bill:nth-child(2){animation-delay:.43s}.ani .bill:nth-child(3){animation-delay:.86s}
+@keyframes billFly{0%{transform:translate(0,0) rotate(-12deg) scale(.8);opacity:0}15%{opacity:1}55%{transform:translate(48px,-34px) rotate(8deg) scale(1)}90%{opacity:1}100%{transform:translate(100px,0) rotate(-4deg) scale(.6);opacity:0}}
+.ani .bank.got{animation:bankPop 1.3s ease-in-out infinite}@keyframes bankPop{0%,80%,100%{transform:scale(1)}88%{transform:scale(1.08)}}
+.ani .wipe{position:relative;display:inline-block}.ani .wipe .amt{animation:wipeOut 2.2s linear infinite;-webkit-mask-image:linear-gradient(90deg,transparent 0 var(--w),#000 var(--w));mask-image:linear-gradient(90deg,transparent 0 var(--w),#000 var(--w))}
+@property --w{syntax:'<percentage>';inherits:false;initial-value:0%}
+@keyframes wipeOut{0%,10%{--w:0%}75%,100%{--w:105%}}
+.ani .eraser{position:absolute;top:-10px;left:-6px;font-size:22px;animation:rub 2.2s linear infinite}
+@keyframes rub{0%,10%{transform:translateX(0) rotate(-20deg)}20%{transform:translateX(14px) translateY(-3px) rotate(-8deg)}30%{transform:translateX(26px) rotate(-20deg)}40%{transform:translateX(40px) translateY(-3px) rotate(-8deg)}50%{transform:translateX(52px) rotate(-20deg)}60%{transform:translateX(66px) translateY(-3px) rotate(-8deg)}75%,100%{transform:translateX(78px) rotate(-20deg);opacity:.4}}
+.ani p{margin:14px 0 0;font-size:14px}.ani p small{display:block;color:var(--sub,#888);font-weight:500;font-size:12px;margin-top:3px}
+@media (prefers-reduced-motion:reduce){.ani .bill,.ani .bank.got,.ani .eraser,.ani .wipe .amt{animation:none}.ani .bill{opacity:1;left:110px}}
 /* 📅 다이어리 고르기 */
 .cal button.sel{outline:3px solid var(--ink);outline-offset:-3px}
 .act{position:sticky;bottom:-18px;background:var(--surface);border-top:1px solid var(--line);margin:10px -18px 0;padding:12px 18px 14px;box-shadow:0 -6px 14px #0000000f}
@@ -104,7 +121,7 @@ details.past summary{list-style:none;cursor:pointer;padding:12px 4px;color:var(-
 <div id="busy"><div>저장 중… 잠시만요</div></div>
 
 <script>
-const APP_VERSION='2026-10-27-v4'
+const APP_VERSION='2026-10-28-v5'
 const ALBA_URL='https://script.google.com/macros/s/AKfycbxGpa_Zyok-eV63Otf3C-WpVpiOt8gb4_W18g097IEL9iCUdlBrhMuNltU49u_Cuy5zNQ/exec'
 const STAFF_URL='https://script.google.com/macros/s/AKfycbxKmN_Uo5hIGPm8ITQhM80FxinEL6q1dFiHZAaGR-eRsBb9EDno4C8et31a4mvwzkU9/exec'
 const albaUrl=()=>localStorage.getItem('alba_script_url')||ALBA_URL
@@ -179,9 +196,16 @@ async function fetchAlba(){ const r=await fetch(albaUrl()+'?t='+Date.now()); con
 function useData(d){ S.branches=d.branches||[]; S.workers=d.workers||[]; S.exceptions=d.exceptions||[]; S.payments=d.payments||[]; S.summaryExclude=d.summaryExclude||[]; try{ localStorage.setItem('alba_v3',JSON.stringify(d)) }catch(e){} }
 let 받음=false
 async function pull(){ try{ useData(await fetchAlba()); 받음=true; $('#sync').textContent='✓ 최신' }catch(e){ $('#sync').textContent='⚠️ 못 받음 · '+e.message } render() }
-async function op(fn,msg){
+function 로딩판(a){
+  const 기본='<div>저장 중… 잠시만요</div>'
+  if(!a) return 기본
+  const nm=esc(a.name), amt=won(a.amount)
+  if(a.kind==='pay') return `<div class="ani"><div class="row"><div class="who">🧑‍🍳<small>사장</small></div><span class="bill">💵</span><span class="bill">💵</span><span class="bill">💵</span><div class="bank got"><b>🏦 ${nm} 통장</b><div class="amt">+${amt}</div></div></div><p>${nm}에게 보내는 중…<small>저장이 확인되면 닫힙니다</small></p></div>`
+  return `<div class="ani"><div class="row" style="justify-content:center"><div class="bank" style="width:150px"><b>🏦 ${nm} 통장</b><div class="wipe"><span class="eraser">🧽</span><div class="amt">급여 +${amt}</div></div></div></div><p>지급 기록 지우는 중…<small>저장이 확인되면 닫힙니다</small></p></div>`
+}
+async function op(fn,msg,ani){
   if(!받음){ toast('아직 최신 데이터를 못 받았습니다 — 잠시 뒤에'); return false }
-  $('#busy').classList.add('show')
+  $('#busy').innerHTML=로딩판(ani); $('#busy').classList.add('show')
   try{
     const d=await fetchAlba(), before={w:d.workers.length,p:(d.payments||[]).length}
     fn(d)
@@ -198,7 +222,7 @@ async function op(fn,msg){
 /* 직원 (손익 GAS 직원명부) */
 let STAFF=null
 async function pullStaff(){ try{ const r=await fetch(staffUrl()+'?action=staffList&t='+Date.now()); const j=await r.json(); if(!j.ok) throw new Error(j.error||'직원 못 받음'); STAFF=(j.data&&j.data.staff)||[] }catch(e){ STAFF=STAFF||[]; toast('⚠️ 직원 목록 · '+e.message) } render() }
-async function staffSave(staff){ $('#busy').classList.add('show'); try{ const r=await fetch(staffUrl(),{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'staffSave',staff})}); const j=await r.json().catch(()=>({ok:true})); if(j.ok===false) throw new Error(j.error||'저장 실패'); return true }catch(e){ toast('⚠️ '+e.message); return false }finally{ $('#busy').classList.remove('show') } }
+async function staffSave(staff){ $('#busy').innerHTML=로딩판(); $('#busy').classList.add('show'); try{ const r=await fetch(staffUrl(),{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'staffSave',staff})}); const j=await r.json().catch(()=>({ok:true})); if(j.ok===false) throw new Error(j.error||'저장 실패'); return true }catch(e){ toast('⚠️ '+e.message); return false }finally{ $('#busy').classList.remove('show') } }
 const ym2=v=>{ const m=String(v||'').match(/(\d{4})\D+(\d{1,2})/); return m?`${m[1]}-${m[2].padStart(2,'0')}`:'' }
 function staffActive(ym){ return (STAFF||[]).filter(s=>{ const st=ym2(s['시작연월']), en=ym2(s['종료연월']); if(st&&ym<st) return false; if(en&&ym>en) return false; return true }) }
 
@@ -373,9 +397,10 @@ document.addEventListener('click',async e=>{
     if(ok){ DSEL=new Set(); 근무표(wid,true); $('#sheet').scrollTop=sc } return }
   if(d.pay){ const w=S.workers.find(x=>x.id===d.pay), ym=UI.month, r=calcPayroll(w,ym)
     if(!confirm(`${w.name} ${parseYM(ym).m}월 세후 ${won(r.net)}\n지급완료로 확정할까요?`)) return
-    await op(D=>{ D.payments=D.payments||[]; if(!D.payments.some(p=>p.wid===w.id&&p.ym===ym)) D.payments.push({id:uid(),wid:w.id,ym,paidAt:new Date().toISOString(),gross:Math.round(r.gross),net:Math.round(r.net),basePay:Math.round(r.basePay),juHyu:Math.round(r.totalJuHyu)}) }, `${w.name} 지급완료`); return }
+    await op(D=>{ D.payments=D.payments||[]; if(!D.payments.some(p=>p.wid===w.id&&p.ym===ym)) D.payments.push({id:uid(),wid:w.id,ym,paidAt:new Date().toISOString(),gross:Math.round(r.gross),net:Math.round(r.net),basePay:Math.round(r.basePay),juHyu:Math.round(r.totalJuHyu)}) }, `${w.name} 지급완료`, {kind:'pay',name:w.name,amount:Math.round(r.net)}); return }
   if(d.unpay){ const w=S.workers.find(x=>x.id===d.unpay), ym=UI.month; if(!confirm(`${w.name} ${parseYM(ym).m}월 지급완료를 취소할까요?`)) return
-    await op(D=>{ D.payments=(D.payments||[]).filter(p=>!(p.wid===w.id&&p.ym===ym)) }, '지급 취소'); return }
+    const 옛=(S.payments||[]).find(p=>p.wid===w.id&&p.ym===ym)
+    await op(D=>{ D.payments=(D.payments||[]).filter(p=>!(p.wid===w.id&&p.ym===ym)) }, '지급 취소', {kind:'unpay',name:w.name,amount:옛?옛.net:calcPayroll(w,ym).net}); return }
   if(d.excl){ const on=d.on==='1', wid=d.excl; const ok=await op(D=>{ D.summaryExclude=(D.summaryExclude||[]).filter(x=>x!==wid); if(on) D.summaryExclude.push(wid) }, on?'신고에서 뺐습니다':'신고에 넣었습니다'); if(ok) 근무표(wid); return }
   if(b.id==='copyTax'){ const ym=UI.month, ex=new Set(S.summaryExclude), ws=S.workers.filter(w=>w.branchId===UI.branch&&employedInMonth(w,ym)&&!ex.has(w.id))
     if(!ws.length){ toast('복사할 사람이 없습니다'); return }
