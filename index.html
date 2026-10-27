@@ -82,6 +82,12 @@ nav button b{font-size:21px;font-weight:400}nav button[aria-current="page"]{colo
 .toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#191F28;color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none;max-width:90%}.toast.show{opacity:1}
 #busy{position:fixed;inset:0;z-index:40;background:#0004;display:none;align-items:center;justify-content:center}#busy.show{display:flex}
 #busy div{background:var(--surface);border-radius:16px;padding:16px 22px;font-weight:700}
+/* 📅 다이어리 고르기 */
+.cal button.sel{outline:3px solid var(--ink);outline-offset:-3px}
+.act{position:sticky;bottom:-18px;background:var(--surface);border-top:1px solid var(--line);margin:10px -18px 0;padding:12px 18px 14px;box-shadow:0 -6px 14px #0000000f}
+.act.dim{opacity:.6}.act-h{display:flex;justify-content:space-between;align-items:center}.act-h button{color:var(--accent);font-size:13px;font-weight:700}
+.act-b{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:6px;margin-top:8px}.act-b button{padding:12px 4px;border-radius:12px;font-weight:700;font-size:14px;background:var(--soft)}
+.act-b .red{background:#FFEBEE;color:var(--up)}.act-b .blue{background:var(--accent);color:#fff}.act-b button:disabled{opacity:.4}
 details.past summary{list-style:none;cursor:pointer;padding:12px 4px;color:var(--muted);font-weight:700;font-size:14px}details.past summary::-webkit-details-marker{display:none}
 </style>
 </head>
@@ -98,7 +104,7 @@ details.past summary{list-style:none;cursor:pointer;padding:12px 4px;color:var(-
 <div id="busy"><div>저장 중… 잠시만요</div></div>
 
 <script>
-const APP_VERSION='2026-10-27-v2'
+const APP_VERSION='2026-10-27-v3'
 const ALBA_URL='https://script.google.com/macros/s/AKfycbxGpa_Zyok-eV63Otf3C-WpVpiOt8gb4_W18g097IEL9iCUdlBrhMuNltU49u_Cuy5zNQ/exec'
 const STAFF_URL='https://script.google.com/macros/s/AKfycbxKmN_Uo5hIGPm8ITQhM80FxinEL6q1dFiHZAaGR-eRsBb9EDno4C8et31a4mvwzkU9/exec'
 const albaUrl=()=>localStorage.getItem('alba_script_url')||ALBA_URL
@@ -128,8 +134,13 @@ $('#ov').addEventListener('click',e=>{ if(e.target.id==='ov') closeSheet() })
 const S={branches:[],workers:[],exceptions:[],payments:[],summaryExclude:[]}
 function hoursBetween(s,e){ if(!s||!e) return 0; const[sh,sm]=String(s).split(':').map(Number),[eh,em]=String(e).split(':').map(Number); let mins=(eh*60+em)-(sh*60+sm); if(mins<=0) mins+=1440; return mins/60 }
 function legacyTerm(w){ const days={}; (w.workDays||[]).forEach(d=>{ days[d]={start:w.startTime||'09:00',end:w.endTime||'18:00'} }); return{from:'',hourlyWage:w.hourlyWage||0,fixed:w.fixed!==false,days} }
-function termsOf(w){ if(Array.isArray(w.terms)&&w.terms.length) return w.terms.slice().sort((a,b)=>String(a.from||'').localeCompare(String(b.from||''))); return[legacyTerm(w)] }
-function termFor(w,ym){ const ts=termsOf(w); let c=ts[0]; ts.forEach(t=>{ const f=String(t.from||''); if(!f||f<=ym) c=t }); return c }
+/* 📅 26-10-27 사장님 「시간대나 시급, 요일 변경 시 … 어떤 날부터 수정하면 이전 날에 영향이 안 가게」
+   조건의 from 이 「2026-10」(달 = 1일부터) 또는 「2026-10-15」(그날부터) · 하루하루 그날의 조건으로 시간·시급을 셈
+   ⚠️ 달로만 된 옛 조건은 1일부터와 같아서 옛 결과와 한 원도 안 다름 (백업으로 확인) · 사장앱 owner/index.html 도 같은 식 */
+const fromKey=t=>{ const f=String(t.from||''); return !f?'':f.length===7?f+'-01':f }
+function termsOf(w){ if(Array.isArray(w.terms)&&w.terms.length) return w.terms.slice().sort((a,b)=>fromKey(a).localeCompare(fromKey(b))); return[legacyTerm(w)] }
+function termOn(w,ds){ const ts=termsOf(w); let c=ts[0]; ts.forEach(t=>{ const f=fromKey(t); if(!f||f<=ds) c=t }); return c }
+function termFor(w,ym){ return termOn(w,ym.length===7?ym+'-01':ym) }
 function isFixedIn(w,ym){ return termFor(w,ym).fixed!==false }
 function termWorks(t,dow){ return !!(t&&t.days&&t.days[dow]) }
 function termDayHours(t,dow){ const d=t&&t.days&&t.days[dow]; return d?hoursBetween(d.start,d.end):0 }
@@ -141,23 +152,24 @@ function employedInMonth(w,ym){ const st=String(w.startYM||'').trim(), en=String
 function employedOn(w,ds){ if(!employedInMonth(w,ds.slice(0,7))) return false; const st=String(w.startYM||'').trim(), en=String(w.resignDate||'').trim(); if(st.length===10&&ds<st) return false; if(en.length===10&&ds>en) return false; return true }
 function getHrsForDate(w,ds){
   if(!employedOn(w,ds)) return 0
-  const dt=new Date(ds+'T00:00:00'), term=termFor(w,ds.slice(0,7)), isWork=termWorks(term,dt.getDay())
+  const dt=new Date(ds+'T00:00:00'), term=termOn(w,ds), isWork=termWorks(term,dt.getDay())
   const exc=S.exceptions.find(e=>e.wid===w.id&&e.date===ds), regH=termDayHours(term,dt.getDay())
   if(exc){ if(exc.type==='absent') return 0; if(exc.type==='override'||exc.type==='extra') return exc.hours
     if(exc.type==='time_override') return hoursBetween(exc.startTime,exc.endTime) }
   return isWork?regH:0
 }
-function getRegHrsForDate(w,ds){ if(!employedOn(w,ds)) return 0; return termDayHours(termFor(w,ds.slice(0,7)),new Date(ds+'T00:00:00').getDay()) }
+function getRegHrsForDate(w,ds){ if(!employedOn(w,ds)) return 0; return termDayHours(termOn(w,ds),new Date(ds+'T00:00:00').getDay()) }
+const wageOn=(w,ds)=>Number(termOn(w,ds).hourlyWage)||0
 function calcTax(g){ const income=Math.round(g*0.03),local=Math.round(g*0.003); return{income,local,total:income+local} }
 function calcPayroll(w,ym){
   const{y,m}=parseYM(ym), dim=daysIn(y,m), wage=wageOf(w,ym)
-  let totalHours=0; for(let d=1;d<=dim;d++) totalHours+=getHrsForDate(w,dateStr(new Date(y,m-1,d)))
+  let totalHours=0, basePay=0, wages=new Set(); for(let d=1;d<=dim;d++){ const ds=dateStr(new Date(y,m-1,d)), h=getHrsForDate(w,ds); totalHours+=h; if(h){ const wg=wageOn(w,ds); basePay+=h*wg; wages.add(wg) } }
   let totalJuHyu=0; const weeks=[]
   for(let d=1;d<=dim;d++){ const sun=new Date(y,m-1,d); if(sun.getDay()!==0) continue; const mon=new Date(sun); mon.setDate(mon.getDate()-6); let wH=0
     for(let i=0;i<7;i++){ const day=new Date(mon); day.setDate(day.getDate()+i); const ds=dateStr(day); wH+=(day.getFullYear()===y&&day.getMonth()+1===m)?getHrsForDate(w,ds):getRegHrsForDate(w,ds) }
-    const j=wH>=15?(Math.min(wH,40)/40)*8*wage:0; weeks.push({label:`${mon.getMonth()+1}/${mon.getDate()}~${sun.getMonth()+1}/${sun.getDate()}`,hours:wH,juHyu:j,ok:wH>=15}); totalJuHyu+=j }
-  const basePay=totalHours*wage, gross=basePay+totalJuHyu, tax=calcTax(gross)
-  return{w,wage,totalHours,totalJuHyu,basePay,gross,tax,net:gross-tax.total,weeks}
+    const j=wH>=15?(Math.min(wH,40)/40)*8*wageOn(w,dateStr(sun)):0; weeks.push({label:`${mon.getMonth()+1}/${mon.getDate()}~${sun.getMonth()+1}/${sun.getDate()}`,hours:wH,juHyu:j,ok:wH>=15}); totalJuHyu+=j }
+  const gross=basePay+totalJuHyu, tax=calcTax(gross)
+  return{w,wage,wages:[...wages],totalHours,totalJuHyu,basePay,gross,tax,net:gross-tax.total,weeks}
 }
 /* 지급완료한 달은 그때 확정한 금액 그대로 (옛 화면·사장앱과 같음) */
 function payOf(w,ym){ const r=calcPayroll(w,ym), p=S.payments.find(x=>x.wid===w.id&&x.ym===ym); return p?{...r,gross:+p.gross||0,net:+p.net||0,basePay:+p.basePay||0,totalJuHyu:+p.juHyu||0,paid:p}:r }
@@ -219,7 +231,7 @@ function 화면급여(){
       ${직원.length?`<div class="grid" style="grid-template-columns:1fr 1fr;margin-top:8px"><div>직원 월급 (세전 · ${직원.length}명)<b class="num">${won(직원월급)}</b></div><div>알바 세전 + 직원<b class="num">${won(알바세전+직원월급)}</b></div></div>`:''}</div>
     <h2>알바 <small>${rs.length}명 · 이름을 누르면 그 달 근무표</small></h2>
     <div class="list">${rs.map(r=>`<div class="row" style="${r.excl?'opacity:.55':''}">
-      <button class="main" data-cal="${r.w.id}" style="text-align:left"><b>${esc(r.w.name)}</b>${isFixedIn(r.w,ym)?'':'<span class="tag amb">비고정</span>'}${r.excl?'<span class="tag">신고 제외</span>':''}
+      <button class="main" data-cal="${r.w.id}" style="text-align:left"><b>${esc(r.w.name)}</b>${r.excl?'<span class="tag">신고 제외</span>':''}
         <span class="sub num">${r.totalHours.toFixed(1)}시간 · 세전 ${Math.round(r.gross).toLocaleString()} · 주휴 ${Math.round(r.totalJuHyu).toLocaleString()}</span></button>
       <div class="net num"><b>${won(r.net)}</b><small>세후</small></div>
       ${r.paid?`<button class="pay on" data-unpay="${r.w.id}">✓ 지급</button>`:`<button class="pay" data-pay="${r.w.id}">지급</button>`}</div>`).join('')||'<div class="empty">이 달에 일한 알바가 없습니다</div>'}</div>
@@ -227,20 +239,32 @@ function 화면급여(){
     <button class="big-btn sec" id="copyTax">📋 세무사에게 보낼 글 복사 (세후)</button>
     <p class="hint" style="text-align:center">「지급」을 누르면 그 금액으로 확정됩니다 (나중에 시급을 바꿔도 안 바뀜) · 신고 제외는 근무표 맨 아래</p>`
 }
-function 근무표(wid){
+/* 📅 다이어리 (26-10-27 사장님 「결근과 추가근무 체크가 어려워 · 다이어리가 가장 편함 · 앱 화면이 넘어가지 않게 · 여러 일을 체크할 수도 있게
+   · 다이어리가 있어야 실제 근무일과 맞춰 보기 용이」)
+   한 판 안에서: 날짜를 눌러 고름(여러 개) → 아래에서 [결근] / [시간 넣기] / [원래대로] → 한 번에 저장 · 판은 그대로 */
+let DSEL=new Set(), DW=null
+function 근무표(wid,keep){
   const w=S.workers.find(x=>x.id===wid); if(!w) return closeSheet()
-  const ym=UI.month,{y,m}=parseYM(ym), r=payOf(w,ym), c=calcPayroll(w,ym), term=termFor(w,ym), fx=isFixedIn(w,ym), dim=daysIn(y,m), first=new Date(y,m-1,1).getDay()
+  if(!keep||DW!==wid){ DSEL=new Set(); DW=wid }
+  const ym=UI.month,{y,m}=parseYM(ym), r=payOf(w,ym), c=calcPayroll(w,ym), dim=daysIn(y,m), first=new Date(y,m-1,1).getDay()
   const cells=[]; for(let i=0;i<first;i++) cells.push('<span></span>')
-  for(let d=1;d<=dim;d++){ const ds=dateStr(new Date(y,m-1,d)), dow=new Date(y,m-1,d).getDay(), e=S.exceptions.find(x=>x.wid===w.id&&x.date===ds), on=employedOn(w,ds)
+  for(let d=1;d<=dim;d++){ const ds=dateStr(new Date(y,m-1,d)), dow=new Date(y,m-1,d).getDay(), term=termOn(w,ds), e=S.exceptions.find(x=>x.wid===w.id&&x.date===ds), on=employedOn(w,ds)
     let cls=on?'':'off', sm=''
-    if(on){ if(e){ if(e.type==='absent'){cls='absent';sm='결근'} else {cls='changed';sm=getHrsForDate(w,ds).toFixed(1).replace('.0','')+'h'} } else if(fx&&termWorks(term,dow)){cls='work';sm=termDayHours(term,dow).toFixed(1).replace('.0','')+'h'} }
-    cells.push(`<button class="${cls}" ${on?`data-day="${ds}" data-w="${w.id}"`:'disabled'}>${d}${sm?`<small>${sm}</small>`:''}</button>`) }
-  const ex=S.summaryExclude.includes(w.id)
-  openSheet(`<h3>${esc(w.name)} · ${m}월 근무표</h3>
-    <p class="hint">파랑 = 정해진 근무 · 빨강 = 결근 · 주황 = 바뀐 날(추가근무 포함) · 날짜를 눌러 바꿉니다${r.paid?'<br>⚠️ 이 달은 지급완료 — 바꿔도 지급한 금액은 그대로입니다':''}</p>
+    if(on){ if(e){ if(e.type==='absent'){cls='absent';sm='결근'} else {cls='changed';sm=getHrsForDate(w,ds).toFixed(1).replace('.0','')+'h'} } else if(termWorks(term,dow)){cls='work';sm=termDayHours(term,dow).toFixed(1).replace('.0','')+'h'} }
+    cells.push(`<button class="${cls} ${DSEL.has(ds)?'sel':''}" ${on?`data-pick="${ds}"`:'disabled'}>${d}${sm?`<small>${sm}</small>`:''}</button>`) }
+  const ex=S.summaryExclude.includes(w.id), n=DSEL.size
+  const 한날=n===1?[...DSEL][0]:null, e1=한날&&S.exceptions.find(x=>x.wid===w.id&&x.date===한날), t1=한날&&termOn(w,한날).days[new Date(한날+'T00:00:00').getDay()]
+  const st=(e1&&e1.startTime)||(t1&&t1.start)||'18:00', en=(e1&&e1.endTime)||(t1&&t1.end)||'23:00'
+  openSheet(`<h3>${esc(w.name)} · ${m}월 다이어리</h3>
+    <p class="hint">파랑 = 정해진 근무 · 빨강 = 결근 · 주황 = 바뀐 날(추가 근무 포함) · <b>날짜를 눌러 고르고</b> 아래에서 한 번에 바꿉니다${r.paid?'<br>⚠️ 지급완료한 달 — 바꿔도 지급한 금액은 그대로':''}</p>
     <div class="cal">${DAY.map(d=>`<span class="h">${d}</span>`).join('')}${cells.join('')}</div>
-    <div class="calc" style="margin-top:14px">
-      <div class="r"><span>근무 ${c.totalHours.toFixed(1)}시간 × ${won(c.wage)}</span><b class="num">${won(r.basePay)}</b></div>
+    <div class="act ${n?'':'dim'}">
+      <div class="act-h"><b>${n?`${n}일 고름`:'날짜를 눌러 고르세요'}</b>${n?'<button data-unpick="1">고른 것 지우기</button>':''}</div>
+      <div class="tt" style="grid-template-columns:44px 1fr 14px 1fr"><span>시간</span>${고르기('dS',st)}<span>~</span>${고르기('dE',en)}</div>
+      <div class="act-b"><button class="red" data-mop="absent" ${n?'':'disabled'}>결근</button><button class="blue" data-mop="time" ${n?'':'disabled'}>이 시간으로 근무</button><button data-mop="clear" ${n?'':'disabled'}>원래대로</button></div>
+      <p class="hint" style="margin:6px 0 0">「이 시간으로 근무」 = 쉬는 날이면 추가 근무 · 근무날이면 시간 바꿈</p></div>
+    <div class="calc" style="margin-top:12px">
+      <div class="r"><span>근무 ${c.totalHours.toFixed(1)}시간 × ${c.wages.length>1?'시급 '+c.wages.map(v=>v.toLocaleString()).join('/'):won(c.wage)}</span><b class="num">${won(r.basePay)}</b></div>
       <div class="r"><span>주휴수당</span><b class="num">${won(r.totalJuHyu)}</b></div>
       <div class="r t"><span>세전 (손익 반영)</span><b class="num">${won(r.gross)}</b></div>
       <div class="r"><span>공제 3.3%</span><b class="num">−${won(r.gross-r.net)}</b></div>
@@ -251,18 +275,6 @@ function 근무표(wid){
 }
 const 시각들=(()=>{ const o=[]; [9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,0,1,2,3].forEach(h=>{ o.push(String(h).padStart(2,'0')+':00'); o.push(String(h).padStart(2,'0')+':30') }); return o })()
 const 고르기=(id,v)=>`<select id="${id}">${시각들.map(t=>`<option ${t===v?'selected':''}>${t}</option>`).join('')}</select>`
-function 날짜창(wid,ds){
-  const w=S.workers.find(x=>x.id===wid), dt=new Date(ds+'T00:00:00'), term=termFor(w,ds.slice(0,7)), t=term.days&&term.days[dt.getDay()]
-  const e=S.exceptions.find(x=>x.wid===wid&&x.date===ds), 원래=isFixedIn(w,ds.slice(0,7))&&t
-  const st=(e&&e.startTime)||(t&&t.start)||'18:00', en=(e&&e.endTime)||(t&&t.end)||'23:00'
-  openSheet(`<h3>${esc(w.name)} · ${dt.getMonth()+1}/${dt.getDate()} (${DAY[dt.getDay()]})</h3>
-    <p class="hint">지금: ${e?(e.type==='absent'?'결근':`${getHrsForDate(w,ds).toFixed(1)}시간 (바뀜)`):원래?`정해진 근무 ${t.start}~${t.end}`:'쉬는 날'}</p>
-    ${원래||e&&e.type!=='absent'?`<button class="big-btn red" data-dop="absent" data-w="${wid}" data-ds="${ds}">결근</button>`:''}
-    <div class="fld" style="margin-top:14px"><label>${원래?'시간 바꾸기':'추가 근무 넣기'}</label><div class="tt"><span>시간</span>${고르기('dS',st)}<span>~</span>${고르기('dE',en)}</div></div>
-    <button class="big-btn" data-dop="time" data-w="${wid}" data-ds="${ds}">${원래?'이 시간으로 바꾸기':'추가 근무로 넣기'}</button>
-    ${e?`<button class="big-btn sec" data-dop="clear" data-w="${wid}" data-ds="${ds}">원래대로 (바꾼 것 지우기)</button>`:''}
-    <button class="big-btn sec" data-back="${wid}" style="background:var(--soft);color:var(--ink)">← 근무표로</button>`)
-}
 
 /* ── 👥 사람 ── */
 function 화면사람(){
@@ -270,8 +282,8 @@ function 화면사람(){
   const 알바=S.workers.filter(w=>w.branchId===bid), 지금=알바.filter(w=>employedInMonth(w,now)||String(w.startYM||'')>now), 지난=알바.filter(w=>!지금.includes(w))
   const 직원=(STAFF||[]).filter(s=>(s['지점']||'백석점')===bn)
   const 직원지금=직원.filter(s=>!ym2(s['종료연월'])||ym2(s['종료연월'])>=now), 직원지난=직원.filter(s=>!직원지금.includes(s))
-  const 알바줄=w=>{ const t=termFor(w,now), ds=Object.keys(t.days||{}).sort().map(d=>DAY[d]).join('·'), tm=Object.values(t.days||{})[0]
-    return `<button class="row" data-ew="${w.id}"><span class="main"><b>${esc(w.name)}</b>${w.resignDate?`<span class="tag red">${esc(w.resignDate)} 퇴사</span>`:''}<span class="sub">${t.fixed!==false?`${ds||'요일 없음'}${tm?' · '+tm.start+'~'+tm.end:''}`:'비고정 (날마다 다름)'} · ${w.startYM?esc(w.startYM)+' 입사':'예전부터'}</span></span><span class="num" style="font-weight:700">${won(Number(t.hourlyWage)||0)}</span></button>` }
+  const 알바줄=w=>{ const t=termOn(w,dateStr(new Date())), ds=Object.keys(t.days||{}).sort().map(d=>DAY[d]).join('·'), tm=Object.values(t.days||{})[0]
+    return `<button class="row" data-ew="${w.id}"><span class="main"><b>${esc(w.name)}</b>${w.resignDate?`<span class="tag red">${esc(w.resignDate)} 퇴사</span>`:''}<span class="sub">${ds?`${ds}${tm?' · '+tm.start+'~'+tm.end:''}`:'정해진 요일 없음 (다이어리로 넣기)'} · ${w.startYM?esc(w.startYM)+' 입사':'예전부터'}</span></span><span class="num" style="font-weight:700">${won(Number(t.hourlyWage)||0)}</span></button>` }
   const 직원줄=s=>`<button class="row" data-es="${esc(s['id'])}"><span class="main"><b>${esc(s['이름'])}</b><span class="sub">${ym2(s['시작연월'])||'예전'}부터${ym2(s['종료연월'])?' · '+ym2(s['종료연월'])+'까지':''}</span></span><span class="num" style="font-weight:700">${won(Number(s['월급'])||0)}</span></button>`
   return `<h2>알바 <small>${지금.length}명</small></h2><div class="list">${지금.map(알바줄).join('')||'<div class="empty">없음</div>'}</div>
     <button class="big-btn sec" data-ew="new">+ 알바 추가</button>
@@ -282,19 +294,18 @@ function 화면사람(){
 /* 알바 수정 — 조건(시급·요일·시간)은 「○월부터」로 쌓음 · 퇴사 = 마지막 근무일 */
 let EW=null
 function 알바창(id){
-  const w=id==='new'?null:S.workers.find(x=>x.id===id), now=fmtMonth(new Date()), t=w?termFor(w,now):{hourlyWage:10320,fixed:true,days:{}}
-  EW={id:w?w.id:null,from:w?now:'',wage:String(t.hourlyWage||''),fixed:t.fixed!==false,days:JSON.parse(JSON.stringify(t.days||{}))}
+  const w=id==='new'?null:S.workers.find(x=>x.id===id), now=fmtMonth(new Date()), t=w?termOn(w,dateStr(new Date())):{hourlyWage:10320,fixed:true,days:{}}
+  EW={id:w?w.id:null,from:w?dateStr(new Date()):'',wage:String(t.hourlyWage||''),fixed:t.fixed!==false,days:JSON.parse(JSON.stringify(t.days||{}))}
   그리기알바창(w)
 }
 function 그리기알바창(w){
   const ts=w?termsOf(w):[]
   openSheet(`<h3>${w?esc(w.name)+' 수정':'알바 추가'}</h3>
     ${w?'':`<div class="fld"><label>이름</label><input class="in" id="aName" placeholder="예: 김민수"></div><div class="fld"><label>입사일 (첫 근무일)</label><input class="in" type="date" id="aStart" value="${dateStr(new Date())}"></div>`}
-    ${ts.length?`<div class="fld"><label>지금까지 조건</label>${ts.map(t=>`<div class="hint" style="margin:2px 0">${t.from?esc(t.from)+'부터':'처음부터'} · ${won(Number(t.hourlyWage)||0)} · ${t.fixed===false?'비고정':Object.keys(t.days||{}).sort().map(d=>DAY[d]).join('·')||'요일 없음'}</div>`).join('')}</div>`:''}
-    <div class="fld"><label>${w?'새 조건 — 언제부터':'근무 조건'}</label>${w?`<input class="in" type="month" id="aFrom" value="${EW.from}">`:''}</div>
+    ${ts.length?`<div class="fld"><label>지금까지 조건</label>${ts.map(t=>`<div class="hint" style="margin:2px 0">${t.from?esc(t.from)+'부터':'처음부터'} · ${won(Number(t.hourlyWage)||0)} · ${Object.keys(t.days||{}).sort().map(d=>DAY[d]).join('·')||'정해진 요일 없음'}</div>`).join('')}</div>`:''}
+    <div class="fld"><label>${w?'새 조건 — 며칠부터 (그 전 날은 그대로)':'근무 조건'}</label>${w?`<input class="in" type="date" id="aFrom" value="${EW.from}">`:''}</div>
     <div class="fld"><label>시급</label><input class="in num" id="aWage" inputmode="numeric" value="${EW.wage?Number(EW.wage).toLocaleString():''}" placeholder="10,320"><div class="money-hint" id="aWageH">${EW.wage?만(EW.wage):''}</div></div>
-    <div class="fld"><label>근무 방식</label><div class="days"><button data-fx="1" class="${EW.fixed?'on':''}">정해진 요일</button><button data-fx="0" class="${EW.fixed?'':'on'}">비고정 (날마다 넣기)</button></div></div>
-    ${EW.fixed?`<div class="fld"><label>요일 · 시간</label><div class="days">${[1,2,3,4,5,6,0].map(d=>`<button data-wd="${d}" class="${EW.days[d]?'on':''}">${DAY[d]}</button>`).join('')}</div>
+    ${true?`<div class="fld"><label>정해진 요일 · 시간 <small style="font-weight:400">(없으면 비워 두고 다이어리로 넣기)</small></label><div class="days">${[1,2,3,4,5,6,0].map(d=>`<button data-wd="${d}" class="${EW.days[d]?'on':''}">${DAY[d]}</button>`).join('')}</div>
       ${[1,2,3,4,5,6,0].filter(d=>EW.days[d]).map(d=>`<div class="tt"><span>${DAY[d]}</span>${고르기('t'+d+'s',EW.days[d].start)}<span>~</span>${고르기('t'+d+'e',EW.days[d].end)}</div>`).join('')}</div>`:''}
     <button class="big-btn" id="aSave">${w?'이 조건으로 저장':'추가'}</button>
     ${w?(w.resignDate?`<button class="big-btn sec" id="aBack">복직 (퇴사 취소)</button>`:`<div class="fld" style="margin-top:18px"><label>퇴사 — 마지막 근무일</label><input class="in" type="date" id="aEnd"></div><button class="big-btn red" id="aResign">퇴사 처리</button><p class="hint">그날까지만 근무로 계산 · 다음 달부터 어디에도 안 뜹니다 · 지난달 기록은 그대로</p>`):''}
@@ -339,14 +350,14 @@ document.addEventListener('click',async e=>{
   if(d.mo){ UI.month=d.mo; render(); return }
   if(d.close){ closeSheet(); return }
   if(d.cal){ 근무표(d.cal); return }
-  if(d.back){ 근무표(d.back); return }
-  if(d.day){ 날짜창(d.w,d.day); return }
-  if(d.dop){ const wid=d.w, ds=d.ds, k=d.dop, st=$('#dS')&&$('#dS').value, en=$('#dE')&&$('#dE').value
+  if(d.pick){ const st=$('#dS')&&$('#dS').value, en=$('#dE')&&$('#dE').value; DSEL.has(d.pick)?DSEL.delete(d.pick):DSEL.add(d.pick); const sc=$('#sheet').scrollTop; 근무표(DW,true); $('#sheet').scrollTop=sc; return }
+  if(d.unpick){ DSEL=new Set(); const sc=$('#sheet').scrollTop; 근무표(DW,true); $('#sheet').scrollTop=sc; return }
+  if(d.mop){ const wid=DW, days=[...DSEL], k=d.mop, st=$('#dS').value, en=$('#dE').value
     if(k==='time'&&st===en){ toast('시작과 끝이 같습니다'); return }
-    const ok=await op(D=>{ D.exceptions=(D.exceptions||[]).filter(x=>!(x.wid===wid&&x.date===ds))
-      if(k==='absent') D.exceptions.push({id:uid(),wid,date:ds,type:'absent',hours:0})
-      if(k==='time') D.exceptions.push({id:uid(),wid,date:ds,type:'time_override',startTime:st,endTime:en,hours:0}) }, k==='absent'?'결근으로 넣었습니다':k==='time'?'시간을 넣었습니다':'원래대로 했습니다')
-    if(ok) 근무표(wid); return }
+    const sc=$('#sheet').scrollTop
+    const ok=await op(D=>{ D.exceptions=(D.exceptions||[]).filter(x=>!(x.wid===wid&&days.includes(x.date)))
+      days.forEach(ds=>{ if(k==='absent') D.exceptions.push({id:uid(),wid,date:ds,type:'absent',hours:0}); if(k==='time') D.exceptions.push({id:uid(),wid,date:ds,type:'time_override',startTime:st,endTime:en,hours:0}) }) }, `${days.length}일 ${k==='absent'?'결근':k==='time'?st+'~'+en+' 근무':'원래대로'}`)
+    if(ok){ DSEL=new Set(); 근무표(wid,true); $('#sheet').scrollTop=sc } return }
   if(d.pay){ const w=S.workers.find(x=>x.id===d.pay), ym=UI.month, r=calcPayroll(w,ym)
     if(!confirm(`${w.name} ${parseYM(ym).m}월 세후 ${won(r.net)}\n지급완료로 확정할까요?`)) return
     await op(D=>{ D.payments=D.payments||[]; if(!D.payments.some(p=>p.wid===w.id&&p.ym===ym)) D.payments.push({id:uid(),wid:w.id,ym,paidAt:new Date().toISOString(),gross:Math.round(r.gross),net:Math.round(r.net),basePay:Math.round(r.basePay),juHyu:Math.round(r.totalJuHyu)}) }, `${w.name} 지급완료`); return }
@@ -358,15 +369,13 @@ document.addEventListener('click',async e=>{
     const txt=[`${지점이름()} ${parseYM(ym).m}월 세후급여`].concat(ws.map(w=>`${w.name} ${won(payOf(w,ym).net)}`)).join('\n')
     try{ await navigator.clipboard.writeText(txt); toast('📋 복사했습니다') }catch(_){ const t=document.createElement('textarea'); t.value=txt; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); toast('📋 복사했습니다') } return }
   if(d.ew){ 알바창(d.ew); return }
-  if(d.fx!=null){ 알바창읽기(); EW.fixed=d.fx==='1'; 그리기알바창(EW.id?S.workers.find(x=>x.id===EW.id):null); return }
   if(d.wd!=null){ 알바창읽기(); const k=d.wd; if(EW.days[k]) delete EW.days[k]; else { const f=Object.values(EW.days)[0]; EW.days[k]=f?{...f}:{start:'18:00',end:'23:00'} } 그리기알바창(EW.id?S.workers.find(x=>x.id===EW.id):null); return }
-  if(b.id==='aSave'){ 알바창읽기(); const wage=Number(EW.wage)||0; if(!wage){ toast('시급을 넣어 주세요'); return } if(EW.fixed&&!Object.keys(EW.days).length){ toast('요일을 골라 주세요'); return }
-    const term={from:'',hourlyWage:wage,fixed:EW.fixed,days:EW.fixed?EW.days:{}}
+  if(b.id==='aSave'){ 알바창읽기(); const wage=Number(EW.wage)||0; if(!wage){ toast('시급을 넣어 주세요'); return } const term={from:'',hourlyWage:wage,fixed:true,days:EW.days}   // 26-10-27 고정/비고정 없앰 — 요일이 없으면 다이어리로만
     if(!EW.id){ const name=($('#aName').value||'').trim(), st=$('#aStart').value; if(!name){ toast('이름을 넣어 주세요'); return }
       const ok=await op(D=>{ D.workers.push({id:uid(),name,branchId:UI.branch,startYM:st,terms:[term]}) }, `${name} 추가`); if(ok) closeSheet(); return }
     if(!EW.from){ toast('언제부터인지 골라 주세요'); return }
     term.from=EW.from; const id=EW.id
-    const ok=await op(D=>{ const w=D.workers.find(x=>x.id===id); if(!w) throw new Error('알바를 못 찾았습니다'); const ts=termsOf(w).filter(t=>String(t.from||'')!==term.from); ts.push(term); w.terms=ts.sort((a,b)=>String(a.from||'').localeCompare(String(b.from||''))) }, `${EW.from}부터 새 조건`); if(ok) closeSheet(); return }
+    const ok=await op(D=>{ const w=D.workers.find(x=>x.id===id); if(!w) throw new Error('알바를 못 찾았습니다'); const ts=termsOf(w).filter(t=>fromKey(t)!==fromKey(term)); ts.push(term); w.terms=ts.sort((a,b)=>fromKey(a).localeCompare(fromKey(b))) }, `${EW.from}부터 새 조건 (그 전 날은 그대로)`); if(ok) closeSheet(); return }
   if(b.id==='aResign'){ const en=$('#aEnd').value, id=EW.id, w=S.workers.find(x=>x.id===id); if(!en){ toast('마지막 근무일을 골라 주세요'); return } if(!confirm(`${w.name} — ${en}까지 근무하고 퇴사\n다음 달부터 앱에 안 뜹니다. 할까요?`)) return
     const ok=await op(D=>{ const x=D.workers.find(v=>v.id===id); x.resigned=true; x.resignDate=en }, `${w.name} 퇴사 처리`); if(ok) closeSheet(); return }
   if(b.id==='aBack'){ const id=EW.id; const ok=await op(D=>{ const x=D.workers.find(v=>v.id===id); delete x.resigned; delete x.resignDate }, '복직 처리'); if(ok) closeSheet(); return }
