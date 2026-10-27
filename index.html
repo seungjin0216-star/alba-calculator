@@ -104,7 +104,7 @@ details.past summary{list-style:none;cursor:pointer;padding:12px 4px;color:var(-
 <div id="busy"><div>저장 중… 잠시만요</div></div>
 
 <script>
-const APP_VERSION='2026-10-27-v3'
+const APP_VERSION='2026-10-27-v4'
 const ALBA_URL='https://script.google.com/macros/s/AKfycbxGpa_Zyok-eV63Otf3C-WpVpiOt8gb4_W18g097IEL9iCUdlBrhMuNltU49u_Cuy5zNQ/exec'
 const STAFF_URL='https://script.google.com/macros/s/AKfycbxKmN_Uo5hIGPm8ITQhM80FxinEL6q1dFiHZAaGR-eRsBb9EDno4C8et31a4mvwzkU9/exec'
 const albaUrl=()=>localStorage.getItem('alba_script_url')||ALBA_URL
@@ -222,7 +222,7 @@ function 화면급여(){
   const ym=UI.month, bid=UI.branch, ex=new Set(S.summaryExclude)
   const ws=S.workers.filter(w=>w.branchId===bid&&employedInMonth(w,ym))
   const rs=ws.map(w=>({w,...payOf(w,ym),excl:ex.has(w.id)}))
-  const 직원=staffActive(ym).filter(s=>(s['지점']||'백석점')===지점이름())
+  const 직원=staffActive(ym).filter(s=>(s['지점']||'백석점')===지점이름()&&s['구분']!=='4대보험만')
   const 알바세후=rs.reduce((a,r)=>a+r.net,0), 알바세전=rs.reduce((a,r)=>a+r.gross,0), 주휴=rs.reduce((a,r)=>a+r.totalJuHyu,0), 직원월급=직원.reduce((a,s)=>a+(Number(s['월급'])||0),0)
   const 지급=rs.filter(r=>r.paid).length
   return `<div class="card hero"><div class="k"><span>${parseYM(ym).m}월 알바 세후 (실제 줄 돈)</span><span>지급 ${지급}/${rs.length}</span></div>
@@ -280,15 +280,20 @@ const 고르기=(id,v)=>`<select id="${id}">${시각들.map(t=>`<option ${t===v?
 function 화면사람(){
   const bid=UI.branch, bn=지점이름(), now=fmtMonth(new Date())
   const 알바=S.workers.filter(w=>w.branchId===bid), 지금=알바.filter(w=>employedInMonth(w,now)||String(w.startYM||'')>now), 지난=알바.filter(w=>!지금.includes(w))
-  const 직원=(STAFF||[]).filter(s=>(s['지점']||'백석점')===bn)
-  const 직원지금=직원.filter(s=>!ym2(s['종료연월'])||ym2(s['종료연월'])>=now), 직원지난=직원.filter(s=>!직원지금.includes(s))
+  const 모두직원=(STAFF||[]).filter(s=>(s['지점']||'백석점')===bn), 직원=모두직원.filter(s=>s['구분']!=='4대보험만'), 보험만=모두직원.filter(s=>s['구분']==='4대보험만')
+  const 보험만지금=보험만.filter(s=>!ym2(s['종료연월'])||ym2(s['종료연월'])>=now)
+  const 직원지금=직원.filter(s=>!ym2(s['종료연월'])||ym2(s['종료연월'])>=now), 직원지난=모두직원.filter(s=>!직원지금.includes(s)&&!보험만지금.includes(s))
   const 알바줄=w=>{ const t=termOn(w,dateStr(new Date())), ds=Object.keys(t.days||{}).sort().map(d=>DAY[d]).join('·'), tm=Object.values(t.days||{})[0]
     return `<button class="row" data-ew="${w.id}"><span class="main"><b>${esc(w.name)}</b>${w.resignDate?`<span class="tag red">${esc(w.resignDate)} 퇴사</span>`:''}<span class="sub">${ds?`${ds}${tm?' · '+tm.start+'~'+tm.end:''}`:'정해진 요일 없음 (다이어리로 넣기)'} · ${w.startYM?esc(w.startYM)+' 입사':'예전부터'}</span></span><span class="num" style="font-weight:700">${won(Number(t.hourlyWage)||0)}</span></button>` }
-  const 직원줄=s=>`<button class="row" data-es="${esc(s['id'])}"><span class="main"><b>${esc(s['이름'])}</b><span class="sub">${ym2(s['시작연월'])||'예전'}부터${ym2(s['종료연월'])?' · '+ym2(s['종료연월'])+'까지':''}</span></span><span class="num" style="font-weight:700">${won(Number(s['월급'])||0)}</span></button>`
+  const 보험곳=s=>{ const g=s['4대보험지점']; return g&&g!==s['지점']?` · 4대보험 ${esc(g.replace('점',''))}에서`:'' }
+  const 직원줄=s=>`<button class="row" data-es="${esc(s['id'])}"><span class="main"><b>${esc(s['이름'])}</b><span class="sub">${ym2(s['시작연월'])||'예전'}부터${ym2(s['종료연월'])?' · '+ym2(s['종료연월'])+'까지':''}${보험곳(s)}${Number(s['신고보수'])?' · 신고 '+won(Number(s['신고보수'])):''}</span></span><span class="num" style="font-weight:700">${s['구분']==='4대보험만'?'신고 '+won(Number(s['신고보수'])||Number(s['월급'])||0):won(Number(s['월급'])||0)}</span></button>`
   return `<h2>알바 <small>${지금.length}명</small></h2><div class="list">${지금.map(알바줄).join('')||'<div class="empty">없음</div>'}</div>
     <button class="big-btn sec" data-ew="new">+ 알바 추가</button>
     <h2>직원 <small>${STAFF==null?'불러오는 중…':직원지금.length+'명 · 월급 = 세전'}</small></h2><div class="list">${직원지금.map(직원줄).join('')||'<div class="empty">없음</div>'}</div>
     <button class="big-btn sec" data-es="new">+ 직원 추가</button>
+    <h2>🧾 4대보험만 내는 인원 <small>${보험만지금.length}명 · 급여 계상 없음</small></h2><div class="list">${보험만지금.map(직원줄).join('')||'<div class="empty">없음</div>'}</div>
+    <button class="big-btn sec" data-es="new" data-kind="보험만">+ 4대보험만 내는 인원 추가</button>
+    <p class="hint">4대보험 추정: 직원 = 신고 월급(없으면 월급) × 10.9% · 4대보험만 = 신고 월급 × 20.6% → 「4대보험 내는 지점」 손익에 · 실제 납부액을 넣은 달은 실제 그대로</p>
     ${지난.length||직원지난.length?`<details class="past"><summary>▸ 지난 사람 (퇴사 ${지난.length+직원지난.length}명) — 그 달로 가면 기록은 그대로</summary><div class="list">${지난.map(알바줄).join('')}${직원지난.map(직원줄).join('')}</div></details>`:''}`
 }
 /* 알바 수정 — 조건(시급·요일·시간)은 「○월부터」로 쌓음 · 퇴사 = 마지막 근무일 */
@@ -313,23 +318,31 @@ function 그리기알바창(w){
 }
 function 알바창읽기(){ const v=$('#aWage'); if(v) EW.wage=v.value.replace(/[^0-9]/g,''); [0,1,2,3,4,5,6].forEach(d=>{ if(EW.days[d]&&$('#t'+d+'s')){ EW.days[d]={start:$('#t'+d+'s').value,end:$('#t'+d+'e').value} } }); const f=$('#aFrom'); if(f) EW.from=f.value }
 /* 직원 — 월급 바꾸기는 「○월부터」: 지금 줄은 전달까지로 끝내고 새 줄을 시작 (손익 직원급여도 그 달부터) */
-function 직원창(id){
-  const s=id==='new'?null:(STAFF||[]).find(x=>String(x['id'])===String(id)), now=fmtMonth(new Date())
-  openSheet(`<h3>${s?esc(s['이름']):'직원 추가'}</h3>
-    ${s?`<p class="hint">${esc(s['지점'])} · ${ym2(s['시작연월'])||'예전'}부터${ym2(s['종료연월'])?' · '+ym2(s['종료연월'])+'까지':''} · 월급 ${won(Number(s['월급'])||0)} (세전)</p>
-      <div class="fld"><label>월급 바꾸기 — 언제부터</label><input class="in" type="month" id="sFrom" value="${now}"></div>
+/* 직원 · 4대보험만 인원 — 「○월부터」 월급 바꾸기 · 퇴사 · 4대보험 내는 지점 · 신고 월급 (26-10-27) */
+function 직원창(id,kind){
+  const s=id==='new'?null:(STAFF||[]).find(x=>String(x['id'])===String(id)), now=fmtMonth(new Date()), 보험만=s?s['구분']==='4대보험만':kind==='보험만'
+  const 지점고르기=(idn,v)=>`<select class="in" id="${idn}">${STAFF_BRANCHES.map(b=>`<option ${b===v?'selected':''}>${b}</option>`).join('')}</select>`
+  const 신고칸=(v)=>`<div class="fld"><label>4대보험 신고 월급 ${보험만?'':'<small style="font-weight:400">(실제 월급과 같으면 비워 두기)</small>'}</label><input class="in num" id="sRep" inputmode="numeric" value="${v?Number(v).toLocaleString():''}" placeholder="${보험만?'2,000,000':'비워 두면 월급'}"><div class="money-hint" id="sRepH">${v?만(v):''}</div></div>`
+  openSheet(`<h3>${s?esc(s['이름']):보험만?'4대보험만 내는 인원 추가':'직원 추가'}</h3>
+    ${s?`<p class="hint">${esc(s['지점'])} · ${ym2(s['시작연월'])||'예전'}부터${ym2(s['종료연월'])?' · '+ym2(s['종료연월'])+'까지':''}${보험만?' · 급여 계상 없음':' · 월급 '+won(Number(s['월급'])||0)+' (세전)'}</p>
+      <div class="fld"><label>4대보험 내는 지점</label>${지점고르기('sIns',s['4대보험지점']||s['지점'])}</div>
+      ${신고칸(s['신고보수'])}
+      <button class="big-btn" id="sIns4">4대보험 칸 저장</button>
+      ${보험만?'':`<div class="fld" style="margin-top:18px"><label>월급 바꾸기 — 언제부터</label><input class="in" type="month" id="sFrom" value="${now}"></div>
       <div class="fld"><label>새 월급 (세전)</label><input class="in num" id="sPay" inputmode="numeric" placeholder="3,000,000"><div class="money-hint" id="sPayH"></div></div>
-      <button class="big-btn" id="sRaise">이 달부터 새 월급</button>
-      <p class="hint">그 전 달까지는 지금 월급 그대로 남습니다</p>
-      ${ym2(s['종료연월'])?'':`<div class="fld" style="margin-top:18px"><label>퇴사 — 마지막 근무월</label><input class="in" type="month" id="sEnd" value="${now}"></div><button class="big-btn red" id="sResign">퇴사 처리</button>`}`
+      <button class="big-btn" id="sRaise">이 달부터 새 월급</button><p class="hint">그 전 달까지는 지금 월급 그대로 남습니다</p>`}
+      ${ym2(s['종료연월'])?'':`<div class="fld" style="margin-top:18px"><label>${보험만?'빼기 — 마지막 달':'퇴사 — 마지막 근무월'}</label><input class="in" type="month" id="sEnd" value="${now}"></div><button class="big-btn red" id="sResign">${보험만?'이 달까지만':'퇴사 처리'}</button>`}`
     :`<div class="fld"><label>이름</label><input class="in" id="sName"></div>
-      <div class="fld"><label>지점</label><select class="in" id="sBr">${STAFF_BRANCHES.map(b=>`<option ${b===지점이름()?'selected':''}>${b}</option>`).join('')}</select></div>
-      <div class="fld"><label>입사 — 첫 달</label><input class="in" type="month" id="sStart" value="${now}"></div>
-      <div class="fld"><label>월급 (세전)</label><input class="in num" id="sPay" inputmode="numeric" placeholder="3,000,000"><div class="money-hint" id="sPayH"></div></div>
-      <button class="big-btn" id="sAdd">추가</button>`}
+      <div class="fld"><label>${보험만?'4대보험 내는 지점':'일하는 지점 (급여 나가는 곳)'}</label>${지점고르기('sBr',지점이름())}</div>
+      ${보험만?'':`<div class="fld"><label>4대보험 내는 지점</label>${지점고르기('sIns',지점이름())}</div>`}
+      <div class="fld"><label>첫 달</label><input class="in" type="month" id="sStart" value="${now}"></div>
+      ${보험만?'':`<div class="fld"><label>월급 (세전)</label><input class="in num" id="sPay" inputmode="numeric" placeholder="3,000,000"><div class="money-hint" id="sPayH"></div></div>`}
+      ${신고칸('')}
+      <button class="big-btn" id="sAdd" data-kind="${보험만?'보험만':''}">추가</button>`}
     <button class="big-btn sec" data-close="1" style="background:var(--soft);color:var(--ink)">닫기</button>`)
   window._직원=s
 }
+const 기존칸=s=>({구분:s['구분']||'',['4대보험지점']:s['4대보험지점']||'',신고보수:Number(s['신고보수'])||''})
 const 금액=id=>Number(($(id)||{value:''}).value.replace(/[^0-9]/g,''))||0
 
 /* ── ⚙️ 설정 ── */
@@ -379,23 +392,28 @@ document.addEventListener('click',async e=>{
   if(b.id==='aResign'){ const en=$('#aEnd').value, id=EW.id, w=S.workers.find(x=>x.id===id); if(!en){ toast('마지막 근무일을 골라 주세요'); return } if(!confirm(`${w.name} — ${en}까지 근무하고 퇴사\n다음 달부터 앱에 안 뜹니다. 할까요?`)) return
     const ok=await op(D=>{ const x=D.workers.find(v=>v.id===id); x.resigned=true; x.resignDate=en }, `${w.name} 퇴사 처리`); if(ok) closeSheet(); return }
   if(b.id==='aBack'){ const id=EW.id; const ok=await op(D=>{ const x=D.workers.find(v=>v.id===id); delete x.resigned; delete x.resignDate }, '복직 처리'); if(ok) closeSheet(); return }
-  if(d.es){ 직원창(d.es); return }
-  if(b.id==='sAdd'){ const name=($('#sName').value||'').trim(), pay=금액('#sPay'); if(!name||!pay){ toast('이름과 월급을 넣어 주세요'); return }
-    if(await staffSave({id:'',이름:name,지점:$('#sBr').value,월급:pay,시작연월:$('#sStart').value,종료연월:'',메모:''})){ closeSheet(); toast('✓ 직원 추가'); await pullStaff() } return }
+  if(d.es){ 직원창(d.es,d.kind); return }
+  if(b.id==='sAdd'){ const 보험만=d.kind==='보험만', name=($('#sName').value||'').trim(), rep=금액('#sRep'), pay=보험만?rep:금액('#sPay')
+    if(!name||!pay){ toast(보험만?'이름과 신고 월급을 넣어 주세요':'이름과 월급을 넣어 주세요'); return }
+    const br=$('#sBr').value, ins=보험만?br:$('#sIns').value
+    if(await staffSave({id:'',이름:name,지점:br,월급:pay,시작연월:$('#sStart').value,종료연월:'',메모:'',구분:보험만?'4대보험만':'',['4대보험지점']:ins===br?'':ins,신고보수:rep||''})){ closeSheet(); toast(보험만?'✓ 4대보험만 인원 추가':'✓ 직원 추가'); await pullStaff() } return }
+  if(b.id==='sIns4'){ const s=window._직원, ins=$('#sIns').value, rep=금액('#sRep')
+    if(s['구분']==='4대보험만'&&!rep){ toast('신고 월급을 넣어 주세요'); return }
+    if(await staffSave({id:s['id'],이름:s['이름'],지점:s['지점'],월급:s['구분']==='4대보험만'?rep:(Number(s['월급'])||0),시작연월:ym2(s['시작연월']),종료연월:ym2(s['종료연월']),메모:s['메모']||'',구분:s['구분']||'',['4대보험지점']:ins===s['지점']?'':ins,신고보수:rep||''})){ closeSheet(); toast('✓ 4대보험 칸 저장'); await pullStaff() } return }
   if(b.id==='sRaise'){ const s=window._직원, from=$('#sFrom').value, pay=금액('#sPay'); if(!from||!pay){ toast('언제부터와 새 월급을 넣어 주세요'); return }
     const st=ym2(s['시작연월']); if(st&&from<=st){ toast('시작한 달보다 뒤여야 합니다'); return }
     if(!confirm(`${s['이름']} — ${prevYM(from)}까지 ${won(Number(s['월급'])||0)}, ${from}부터 ${won(pay)}\n이렇게 바꿀까요?`)) return
-    const a=await staffSave({id:s['id'],이름:s['이름'],지점:s['지점'],월급:Number(s['월급'])||0,시작연월:ym2(s['시작연월']),종료연월:prevYM(from),메모:s['메모']||''})
-    const b2=a&&await staffSave({id:'',이름:s['이름'],지점:s['지점'],월급:pay,시작연월:from,종료연월:ym2(s['종료연월']),메모:s['메모']||''})
+    const a=await staffSave({id:s['id'],이름:s['이름'],지점:s['지점'],월급:Number(s['월급'])||0,시작연월:ym2(s['시작연월']),종료연월:prevYM(from),메모:s['메모']||'',...기존칸(s)})
+    const b2=a&&await staffSave({id:'',이름:s['이름'],지점:s['지점'],월급:pay,시작연월:from,종료연월:ym2(s['종료연월']),메모:s['메모']||'',...기존칸(s)})
     if(b2){ closeSheet(); toast('✓ '+from+'부터 새 월급'); await pullStaff() } return }
   if(b.id==='sResign'){ const s=window._직원, en=$('#sEnd').value; if(!en) return; if(!confirm(`${s['이름']} — ${en}까지 근무하고 퇴사. 할까요?`)) return
-    if(await staffSave({id:s['id'],이름:s['이름'],지점:s['지점'],월급:Number(s['월급'])||0,시작연월:ym2(s['시작연월']),종료연월:en,메모:s['메모']||''})){ closeSheet(); toast('✓ 퇴사 처리'); await pullStaff() } return }
+    if(await staffSave({id:s['id'],이름:s['이름'],지점:s['지점'],월급:Number(s['월급'])||0,시작연월:ym2(s['시작연월']),종료연월:en,메모:s['메모']||'',...기존칸(s)})){ closeSheet(); toast(s['구분']==='4대보험만'?'✓ 그 달까지만':'✓ 퇴사 처리'); await pullStaff() } return }
   if(b.id==='reload'){ await pull(); await pullStaff(); toast('✓ 다시 받았습니다'); return }
   if(b.id==='dl'){ const blob=new Blob([JSON.stringify({...S,staff:STAFF},null,1)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='알바백업_'+dateStr(new Date())+'.json'; a.click(); return }
 })
 document.addEventListener('change',e=>{ if(e.target.id==='moPick'&&e.target.value){ UI.month=e.target.value; render() } })
 /* 💰 금액 칸 — 쉼표 바로 · 아래 「= 120만원」 (사장님 「표가 없으니 십만 원인지 백만 원인지 인지하기 어렵고 … 1원씩 올라가 전혀 필요 없는 기능」) */
-document.addEventListener('input',e=>{ const t=e.target; if(!['aWage','sPay'].includes(t.id)) return
+document.addEventListener('input',e=>{ const t=e.target; if(!['aWage','sPay','sRep'].includes(t.id)) return
   const n=t.value.replace(/[^0-9]/g,''); t.value=n?Number(n).toLocaleString():''; const h=$('#'+t.id+'H'); if(h) h.textContent=만(n) })
 
 /* ══════════ 시작 ══════════ */
