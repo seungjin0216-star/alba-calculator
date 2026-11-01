@@ -121,7 +121,7 @@ details.past summary{list-style:none;cursor:pointer;padding:12px 4px;color:var(-
 <div id="busy"><div>저장 중… 잠시만요</div></div>
 
 <script>
-const APP_VERSION='2026-10-28-v5'
+const APP_VERSION='2026-11-01-v6'
 const ALBA_URL='https://script.google.com/macros/s/AKfycbxGpa_Zyok-eV63Otf3C-WpVpiOt8gb4_W18g097IEL9iCUdlBrhMuNltU49u_Cuy5zNQ/exec'
 const STAFF_URL='https://script.google.com/macros/s/AKfycbxKmN_Uo5hIGPm8ITQhM80FxinEL6q1dFiHZAaGR-eRsBb9EDno4C8et31a4mvwzkU9/exec'
 const albaUrl=()=>localStorage.getItem('alba_script_url')||ALBA_URL
@@ -189,6 +189,13 @@ function calcPayroll(w,ym){
   return{w,wage,wages:[...wages],totalHours,totalJuHyu,basePay,gross,tax,net:gross-tax.total,weeks}
 }
 /* 지급완료한 달은 그때 확정한 금액 그대로 (옛 화면·사장앱과 같음) */
+/* 🔁 26-11-01 사장님: 「확정을 누른 상태에서 (결근·추가근무) 변경하니 변경이 안 됨. 확정을 풀고 다시 확정을 눌러야 하는데 너무 느림」
+   → 지급한 달의 근무를 고치면 그 저장 한 번에 확정 금액도 새로 맞춤 (지급 표시는 그대로) · 바뀐 것 [달, 옛 세후, 새 세후] */
+function 확정다시_(D,wid,yms){ const 옛=S.exceptions, 바뀜=[]; S.exceptions=D.exceptions||[]
+  try{ const w=D.workers.find(x=>x.id===wid); if(w) (D.payments||[]).forEach(p=>{ if(p.wid!==wid||!yms.includes(p.ym)) return
+    const r=calcPayroll(w,p.ym), net=Math.round(r.net); if(net!==Math.round(+p.net||0)) 바뀜.push([p.ym,+p.net||0,net])
+    Object.assign(p,{gross:Math.round(r.gross),net,basePay:Math.round(r.basePay),juHyu:Math.round(r.totalJuHyu),fixedAt:new Date().toISOString()}) }) }
+  finally{ S.exceptions=옛 } return 바뀜 }
 function payOf(w,ym){ const r=calcPayroll(w,ym), p=S.payments.find(x=>x.wid===w.id&&x.ym===ym); return p?{...r,gross:+p.gross||0,net:+p.net||0,basePay:+p.basePay||0,totalJuHyu:+p.juHyu||0,paid:p}:r }
 
 /* ══════════ 저장 — 최신을 받아 한 가지만 고쳐 보냄 ══════════ */
@@ -259,9 +266,10 @@ function 화면급여(){
         <span class="sub num">${r.totalHours.toFixed(1)}시간 · 세전 ${Math.round(r.gross).toLocaleString()} · 주휴 ${Math.round(r.totalJuHyu).toLocaleString()}</span></button>
       <div class="net num"><b>${won(r.net)}</b><small>세후</small></div>
       ${r.paid?`<button class="pay on" data-unpay="${r.w.id}">✓ 지급</button>`:`<button class="pay" data-pay="${r.w.id}">지급</button>`}</div>`).join('')||'<div class="empty">이 달에 일한 알바가 없습니다</div>'}</div>
+    ${rs.some(r=>!r.paid)?`<button class="big-btn" id="payAll">💵 전체 지급 — 남은 ${rs.filter(r=>!r.paid).length}명 · 세후 ${won(rs.filter(r=>!r.paid).reduce((a,r)=>a+r.net,0))}</button>`:''}
     ${직원.length?`<h2>직원 <small>월급 = 세전</small></h2><div class="list">${직원.map(s=>`<div class="row"><span class="main"><b>${esc(s['이름'])}</b><span class="sub">${ym2(s['시작연월'])?ym2(s['시작연월'])+'부터':'예전부터'}${ym2(s['종료연월'])?' · '+ym2(s['종료연월'])+'까지':''}</span></span><div class="net num"><b>${won(Number(s['월급'])||0)}</b><small>세전</small></div></div>`).join('')}</div>`:''}
     <button class="big-btn sec" id="copyTax">📋 세무사에게 보낼 글 복사 (세후)</button>
-    <p class="hint" style="text-align:center">「지급」을 누르면 그 금액으로 확정됩니다 (나중에 시급을 바꿔도 안 바뀜) · 신고 제외는 근무표 맨 아래</p>`
+    <p class="hint" style="text-align:center">「지급」을 누르면 그 금액으로 확정됩니다 · 확정 뒤에 결근·추가근무를 고치면 금액도 같이 바뀝니다 · 신고 제외는 근무표 맨 아래</p>`
 }
 /* 📅 다이어리 (26-10-27 사장님 「결근과 추가근무 체크가 어려워 · 다이어리가 가장 편함 · 앱 화면이 넘어가지 않게 · 여러 일을 체크할 수도 있게
    · 다이어리가 있어야 실제 근무일과 맞춰 보기 용이」)
@@ -392,12 +400,22 @@ document.addEventListener('click',async e=>{
   if(d.mop){ const wid=DW, days=[...DSEL], k=d.mop, st=$('#dS').value, en=$('#dE').value
     if(k==='time'&&st===en){ toast('시작과 끝이 같습니다'); return }
     const sc=$('#sheet').scrollTop
+    let 바뀜=[]
     const ok=await op(D=>{ D.exceptions=(D.exceptions||[]).filter(x=>!(x.wid===wid&&days.includes(x.date)))
-      days.forEach(ds=>{ if(k==='absent') D.exceptions.push({id:uid(),wid,date:ds,type:'absent',hours:0}); if(k==='time') D.exceptions.push({id:uid(),wid,date:ds,type:'time_override',startTime:st,endTime:en,hours:0}) }) }, `${days.length}일 ${k==='absent'?'결근':k==='time'?st+'~'+en+' 근무':'원래대로'}`)
-    if(ok){ DSEL=new Set(); 근무표(wid,true); $('#sheet').scrollTop=sc } return }
+      days.forEach(ds=>{ if(k==='absent') D.exceptions.push({id:uid(),wid,date:ds,type:'absent',hours:0}); if(k==='time') D.exceptions.push({id:uid(),wid,date:ds,type:'time_override',startTime:st,endTime:en,hours:0}) })
+      바뀜=확정다시_(D,wid,[...new Set(days.map(ds=>ds.slice(0,7)))]) }, `${days.length}일 ${k==='absent'?'결근':k==='time'?st+'~'+en+' 근무':'원래대로'}`)
+    if(ok){ DSEL=new Set(); 근무표(wid,true); $('#sheet').scrollTop=sc
+      if(바뀜.length) toast('✓ 지급 금액도 고침 · '+바뀜.map(([ym,a,b])=>`${parseYM(ym).m}월 ${won(a)} → ${won(b)}`).join(' · ')) } return }
   if(d.pay){ const w=S.workers.find(x=>x.id===d.pay), ym=UI.month, r=calcPayroll(w,ym)
     if(!confirm(`${w.name} ${parseYM(ym).m}월 세후 ${won(r.net)}\n지급완료로 확정할까요?`)) return
     await op(D=>{ D.payments=D.payments||[]; if(!D.payments.some(p=>p.wid===w.id&&p.ym===ym)) D.payments.push({id:uid(),wid:w.id,ym,paidAt:new Date().toISOString(),gross:Math.round(r.gross),net:Math.round(r.net),basePay:Math.round(r.basePay),juHyu:Math.round(r.totalJuHyu)}) }, `${w.name} 지급완료`, {kind:'pay',name:w.name,amount:Math.round(r.net)}); return }
+  /* 💵 26-11-01 사장님: 「전체지급 버튼을 만들고 한 번에 다 지급 체크 (개별도 그대로)」 — 아직 지급 안 한 사람만 한 번에 */
+  if(b.id==='payAll'){ const ym=UI.month, ws=S.workers.filter(w=>w.branchId===UI.branch&&employedInMonth(w,ym)&&!S.payments.some(p=>p.wid===w.id&&p.ym===ym))
+    if(!ws.length){ toast('남은 사람이 없습니다'); return }
+    const rs=ws.map(w=>({w,r:calcPayroll(w,ym)})), 합=rs.reduce((a,x)=>a+Math.round(x.r.net),0)
+    if(!confirm(`${parseYM(ym).m}월 ${rs.length}명 전체 지급완료로 확정할까요?\n\n${rs.map(x=>`${x.w.name} ${won(x.r.net)}`).join('\n')}\n\n합계 세후 ${won(합)}`)) return
+    await op(D=>{ D.payments=D.payments||[]; const at=new Date().toISOString(); rs.forEach(({w,r})=>{ if(!D.payments.some(p=>p.wid===w.id&&p.ym===ym)) D.payments.push({id:uid(),wid:w.id,ym,paidAt:at,gross:Math.round(r.gross),net:Math.round(r.net),basePay:Math.round(r.basePay),juHyu:Math.round(r.totalJuHyu)}) }) },
+      `${rs.length}명 전체 지급완료`, {kind:'pay',name:`${rs.length}명`,amount:합}); return }
   if(d.unpay){ const w=S.workers.find(x=>x.id===d.unpay), ym=UI.month; if(!confirm(`${w.name} ${parseYM(ym).m}월 지급완료를 취소할까요?`)) return
     const 옛=(S.payments||[]).find(p=>p.wid===w.id&&p.ym===ym)
     await op(D=>{ D.payments=(D.payments||[]).filter(p=>!(p.wid===w.id&&p.ym===ym)) }, '지급 취소', {kind:'unpay',name:w.name,amount:옛?옛.net:calcPayroll(w,ym).net}); return }
