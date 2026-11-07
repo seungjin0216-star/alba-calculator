@@ -121,7 +121,7 @@ details.past summary{list-style:none;cursor:pointer;padding:12px 4px;color:var(-
 <div id="busy"><div>저장 중… 잠시만요</div></div>
 
 <script>
-const APP_VERSION='2026-11-01-v6'
+const APP_VERSION='2026-11-07-v7'
 const ALBA_URL='https://script.google.com/macros/s/AKfycbxGpa_Zyok-eV63Otf3C-WpVpiOt8gb4_W18g097IEL9iCUdlBrhMuNltU49u_Cuy5zNQ/exec'
 const STAFF_URL='https://script.google.com/macros/s/AKfycbxKmN_Uo5hIGPm8ITQhM80FxinEL6q1dFiHZAaGR-eRsBb9EDno4C8et31a4mvwzkU9/exec'
 const albaUrl=()=>localStorage.getItem('alba_script_url')||ALBA_URL
@@ -219,10 +219,17 @@ async function op(fn,msg,ani){
     if(d.workers.length<before.w) throw new Error('알바 수가 줄었습니다 — 저장하지 않았습니다')
     const body=JSON.stringify({branches:d.branches,workers:d.workers,exceptions:d.exceptions||[],payments:d.payments||[],summaryExclude:d.summaryExclude||[]})
     if(body.length>49000) throw new Error('데이터가 시트 한 칸 한도에 가까워 저장하지 않았습니다')
-    await fetch(albaUrl(),{method:'POST',headers:{'Content-Type':'text/plain'},body}).catch(()=>{})   // 답장은 못 읽을 수 있음 (CORS) — 아래에서 다시 받아 확인
-    let ok=false; for(const w of [1200,2500,4000]){ await new Promise(r=>setTimeout(r,w)); try{ const n=await fetchAlba(); if(JSON.stringify(n.workers)===JSON.stringify(d.workers)&&JSON.stringify(n.exceptions||[])===JSON.stringify(d.exceptions||[])&&JSON.stringify(n.payments||[])===JSON.stringify(d.payments||[])&&JSON.stringify(n.summaryExclude||[])===JSON.stringify(d.summaryExclude||[])){ useData(n); ok=true; break } }catch(e){} }
-    if(!ok) throw new Error('저장이 확인되지 않았습니다 — 새로고침해서 확인해 주세요')
-    toast('✓ '+msg); return true
+    let 보냄=true
+    await fetch(albaUrl(),{method:'POST',headers:{'Content-Type':'text/plain'},body}).catch(()=>{ 보냄=false })   // 답장은 못 읽을 수 있음 (CORS)
+    if(!보냄) throw new Error('인터넷이 끊겨 못 보냈습니다')
+    /* ⚡ 26-11-07 사장님 「알바계산기 지급이 느려」 — 전에는 보낸 뒤 1.2·2.5·4초 기다리며 다시 받아 맞춰 봐야 닫힘 (최대 8초+)
+       → 보내기가 끝나면(GAS 는 답을 넘기기 전에 이미 저장을 끝냄) 바로 닫고 화면은 보낸 내용으로 · 확인은 뒤에서 조용히
+       ⚠️ 뒤 확인이 두 번 다 안 맞으면 「⚠️ 저장이 확인되지 않았습니다」 + 서버 것으로 다시 그림 (거짓 성공을 그냥 두지 않음) */
+    useData(d); toast('✓ '+msg)
+    ;(async()=>{ const 같나=n=>JSON.stringify(n.workers)===JSON.stringify(d.workers)&&JSON.stringify(n.exceptions||[])===JSON.stringify(d.exceptions||[])&&JSON.stringify(n.payments||[])===JSON.stringify(d.payments||[])&&JSON.stringify(n.summaryExclude||[])===JSON.stringify(d.summaryExclude||[])
+      for(const w of [300,3000]){ await new Promise(r=>setTimeout(r,w)); try{ const n=await fetchAlba(); if(같나(n)){ useData(n); return } }catch(e){} }
+      toast('⚠️ 저장이 확인되지 않았습니다 — 다시 확인해 주세요'); try{ useData(await fetchAlba()) }catch(_){} render() })()
+    return true
   }catch(e){ toast('⚠️ '+e.message); try{ useData(await fetchAlba()) }catch(_){} return false }
   finally{ $('#busy').classList.remove('show'); render() }
 }
